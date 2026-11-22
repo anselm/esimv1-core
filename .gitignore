@@ -1,0 +1,6 @@
+target/
+runs/
+data/cache/
+.locks/
+*.part
+.env
