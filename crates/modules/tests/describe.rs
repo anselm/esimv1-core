@@ -137,7 +137,19 @@ fn m10_surface_matches_the_log() {
 #[test]
 fn q1_cascadia_surface_matches_the_log() {
     if !have_dem() { eprintln!("skipped: no data cache"); return; }
-    with_root(|| surface_matches_log(load("q1-portland-cascadia.js")));
+    // The Portland scenario lives in its own repository (esimv1-portland). The test runs where a
+    // clone of it is found: ESIM_PORTLAND, or scenarios/esimv1-portland beside this folder, which
+    // is where the esimv1 hub keeps it. Elsewhere it is skipped, and says so.
+    let repo = std::env::var("ESIM_PORTLAND").ok().map(PathBuf::from).unwrap_or_else(|| root().join("../scenarios/esimv1-portland"));
+    let manifest = repo.join("manifests/q1-portland-cascadia.js");
+    if !manifest.exists() { eprintln!("skipped: no clone of esimv1-portland at {}", repo.display()); return; }
+    std::env::set_var("ESIM_PROJECT", repo.join("portland-cascadia"));
+    with_root(|| {
+        let mut m = Manifest::load(&manifest).unwrap();
+        for e in &mut m.modules { if let toml::Value::Table(t) = &mut e.params { t.insert("kind".into(), toml::Value::String(e.kind.clone())); } }
+        surface_matches_log(m)
+    });
+    std::env::remove_var("ESIM_PROJECT");
 }
 
 #[test]
