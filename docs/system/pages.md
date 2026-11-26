@@ -3,7 +3,7 @@
 <!-- author: Claude -->
 <!-- ordered-by: Anselm -->
 <!-- written: 2026-11-14 -->
-<!-- revised: 2026-11-14 -->
+<!-- revised: 2026-11-26 -->
 <!-- revision: 1 -->
 # Pages written in HTML
 
@@ -18,8 +18,8 @@ There are two files, both beside the project's manifest:
   of panels. A link at the foot of the page, and `?raw` on the address, still show everything the
   run recorded as the engine lays it out.
 
-A project with neither file gets the automatic pages, and a `README.md` is still rendered as
-before.
+Every project in the catalogue has a `run.html` (since 26 November 2026). A project with neither
+file gets the automatic pages, and a `README.md` is still rendered as before.
 
 ## The tags
 
@@ -44,10 +44,15 @@ run shares one moment in time, so one timeline moves them all.
 The names a map or a series goes by are listed on a run's full data page and on the
 [kinds page](/kinds).
 
+Add `optional` to a map, a chart or a counter that only some variants record. It then draws nothing
+where the run lacks it; without it the page says what is missing.
+
 ## Tabs and columns
 
 `<esim-tabs>` turns each `<section title="...">` inside it into a tab. A `<div class="nb-cols">`
-lays its children out in columns that fold on a narrow screen. Anything else is up to the page:
+lays its children out in columns that fold on a narrow screen. Three classes are styled for every
+page: `nb-lede` for the opening paragraph, `nb-counters` for a row of counters and `nb-note` for a
+marked caveat. Anything else is up to the page:
 it may carry its own `<style>` and its own `<script>`.
 
 ```html
