@@ -189,3 +189,12 @@ fn kinds_describe_under_default_params() {
         assert!(json.contains("\"params\""));
     }
 }
+
+#[test]
+fn every_kind_has_a_title() {
+    for k in esim_modules::KINDS {
+        let t = esim_modules::title_of(k.kind);
+        assert!(!t.is_empty(), "{} has no plain-words title in title_of", k.kind);
+        assert!(t.len() <= 28, "{}: the title {:?} is too long for a box on the diagram", k.kind, t);
+    }
+}

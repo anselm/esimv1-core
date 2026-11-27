@@ -19,6 +19,10 @@ pub struct Describe {
     /// the kernel does not read it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub layer: String,
+    /// What the kind is, in a few plain words, for a box on a diagram ("Heat in the ocean" beside
+    /// `energy.twolayer`). A label for readers; the kernel does not read it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
     /// Ordering among events at the same instant; lower runs first.
     pub priority: i16,
     /// The module's own tick, as written in a manifest ("1h", "1d").

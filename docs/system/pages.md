@@ -30,6 +30,7 @@ run shares one moment in time, so one timeline moves them all.
 | Tag | What it draws |
 |---|---|
 | `<esim-scene>` | The place in three dimensions, with the model's parts by layer. |
+| `<esim-regions>` | The world's countries on a flat map, filled by their score at the moment shown. For runs with a regions module. |
 | `<esim-timeline>` | The bar that moves the moment. Add `play` to start it playing. |
 | `<esim-map field="deaths">` | One map at the moment shown. |
 | `<esim-chart series="power.share" title="...">` | One series over the run. |

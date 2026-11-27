@@ -142,6 +142,7 @@ fn with_place(params: &toml::Value) -> std::borrow::Cow<'_, toml::Value> {
 pub fn describe(kind: &str, name: &str, params: &toml::Value) -> Result<Describe, String> {
     let mut d = (find(kind)?.describe)(name, &with_place(params));
     if d.layer.is_empty() { d.layer = layer_of(kind).to_string(); }
+    if d.title.is_empty() { d.title = title_of(kind).to_string(); }
     Ok(d)
 }
 
@@ -159,6 +160,67 @@ pub const LAYERS: [(u32, &str, &str); 12] = [
     (8000, "plants", "Plants"), (9000, "animals", "Animals"), (10000, "people", "People"),
     (0, "across", "Disturbances"), (0, "record", "The record"),
 ];
+
+/// What a kind is in a few plain words, for a box on a diagram, when its describe does not say.
+/// Every kind has a row; `tests/describe.rs` fails on a kind without one.
+pub fn title_of(kind: &str) -> &'static str {
+    match kind {
+        "water.source" => "A tap",
+        "water.bucket" => "A leaky bucket",
+        "sun.irradiance" => "Sunlight on the ground",
+        "heat.slab" => "Heat in the ground surface",
+        "water.basin" => "Rain, soil and river",
+        "weather.era5" => "Weather from the record",
+        "veg.crop" => "Crops and grass",
+        "fauna.herbivore" => "Grazing animals",
+        "fauna.predator" => "Predators",
+        "hazard.fire" => "Cropland fire",
+        "agents.farms" => "Farmers' choices",
+        "rules.calendar" => "A land-use rule",
+        "nitrogen.basin" => "Nitrogen in the soil",
+        "carbon.emissions" => "CO2 emitted each year",
+        "carbon.pools" => "CO2 in the air",
+        "energy.twolayer" => "Heat in the ocean",
+        "obs.planet" => "Measured CO2 and warming",
+        "carbon.gases" => "Methane and nitrous oxide",
+        "sea.thermal" => "Sea level from warming",
+        "forcing.ar6" => "Other climate forcings",
+        "people.countries" => "Where people live",
+        "climate.countries" => "Each country's climate",
+        "people.heat" => "People outside the niche",
+        "people.wetbulb" => "Dangerous humid heat",
+        "tipping.elements" => "Tipping points",
+        "carbon.tipped" => "Carbon from tipping",
+        "story.bottomline" => "The story so far",
+        "fire.rothermel" => "Fire spread (Rothermel)",
+        "obs.perimeters" => "Mapped fire edge",
+        "obs.dins" => "Inspected structures",
+        "obs.record" => "The incident record",
+        "fire.suppression" => "Firefighting",
+        "obs.hotspots" => "Fire seen from orbit",
+        "fire.cells" => "Fire spread, cell by cell",
+        "events.shock" => "Wild cards",
+        "score.regions" => "Countries scored",
+        "policy.capacity" => "Capacity to cut emissions",
+        "weather.heatwaves" => "Heatwaves",
+        "obs.places" => "Named places",
+        "coast.oneline" => "The shoreline",
+        "quake.ground" => "Ground shaking",
+        "quake.buildings" => "Building damage",
+        "portland.lifelines" => "Services after the quake",
+        "people.aftermath" => "Deaths in the aftermath",
+        "fuel.tanks" => "Fuel tanks",
+        "roads.bridges" => "Bridges",
+        "power.structures" => "Power lines and towers",
+        "roads.routes" => "Emergency routes",
+        "fuel.depot" => "Fuel account",
+        "water.surface" => "Where water lies",
+        "health.hospitals" => "Hospitals",
+        "people.agents" => "People, one by one",
+        "obs.losses" => "Loss estimates on record",
+        _ => "",
+    }
+}
 
 /// The layer a kind belongs to when its describe does not say: by the kind's family, with the
 /// exceptions named first.
