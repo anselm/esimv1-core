@@ -315,3 +315,208 @@ impl Module for Flee {
     fn snapshot(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
     fn restore(&mut self, v: serde_json::Value) { *self = serde_json::from_value(v).unwrap(); }
 }
+
+// ---------------------------------------------------------------- the grid, and three more parts of the ground
+
+/// The cells of a place: the same for every module given the same place, with nothing fetched.
+pub fn grid_of(lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64, res_arcsec: f64) -> LatLonGrid {
+    let (nx, ny, d, lon_w, lat_n) = esim_registry::window_grid(lat_s, lat_n, lon_w, lon_e, res_arcsec);
+    LatLonGrid { nx, ny, dlon: d, dlat: d, lon_w, lat_n }
+}
+fn place_of(kind: &str, name: &str, p: &toml::Value) -> Result<(f64, f64, f64, f64, f64), String> {
+    let need = |k: &str| p.get(k).and_then(|v| v.as_float().or(v.as_integer().map(|i| i as f64))).ok_or(format!("{kind} {name}: no {k}; give it a place"));
+    Ok((need("lat_s")?, need("lat_n")?, need("lon_w")?, need("lon_e")?, param_f64(p, "res_arcsec", 1.0)))
+}
+fn place_params(d: Describe) -> Describe {
+    d.param("lat_s", 0.0, "deg", "from the place").param("lat_n", 0.0, "deg", "").param("lon_w", 0.0, "deg", "").param("lon_e", 0.0, "deg", "").param("res_arcsec", 1.0, "arcsec", "")
+}
+
+/// `ground.cover`: what covers each cell, as ESA WorldCover's class codes.
+#[derive(Serialize, Deserialize)]
+pub struct Cover { name: String, place: (f64, f64, f64, f64, f64), #[serde(skip)] cover: Vec<u8> }
+
+impl Cover {
+    pub fn new(name: &str, p: &toml::Value) -> Result<Cover, String> {
+        let mut c = Cover { name: name.into(), place: place_of("ground.cover", name, p)?, cover: vec![] };
+        c.load()?; Ok(c)
+    }
+    fn load(&mut self) -> Result<(), String> {
+        let root = root();
+        let cat = Catalog::load(&root.join("data/catalog.toml"))?;
+        let lc = cat.asset("esa-worldcover-2021").ok_or("catalog has no esa-worldcover-2021")?;
+        let mut fe = Fetcher::default_for(&root)?;
+        let (a, b, c, d, r) = self.place; let g = grid_of(a, b, c, d, r);
+        self.cover = esim_registry::wildfire::landcover_window(&mut fe, lc, g.nx, g.ny, g.dlon, g.dlat, g.lon_w, g.lat_n)?;
+        Ok(())
+    }
+    pub fn describe(name: &str, _p: &toml::Value) -> Describe {
+        place_params(Describe::new("ground.cover", name, "What covers each cell of the window: tree, shrub, grass, crop, built-up, bare, water and the rest, as the class codes of ESA WorldCover 2021, a map made from satellite images at 10 metres. Read once; nothing here changes during a run, so a burn or a clearing does not show in it."))
+            .dt("once, at the start").own("ground.cover_code", "worldcover code")
+            .asset("esa-worldcover-2021", "land cover")
+            .note("The map is of 2021 and is not updated for what a run does to the ground.")
+    }
+}
+impl Module for Cover {
+    fn name(&self) -> &str { &self.name }
+    fn init(&mut self, ctx: &mut Ctx) {
+        let (a, b, c, d, r) = self.place; let g = grid_of(a, b, c, d, r);
+        ctx.world_write("ground.cover_code", "worldcover code", &g, self.cover.iter().map(|&c| c as f32).collect());
+    }
+    fn handle(&mut self, _ev: &Event, _ctx: &mut Ctx) {}
+    fn snapshot(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
+    fn restore(&mut self, v: serde_json::Value) { let mut c: Cover = serde_json::from_value(v).unwrap(); c.load().expect("cover reload"); *self = c; }
+}
+
+/// `roads.major`: the cells under a road wide enough to matter, from OpenStreetMap.
+#[derive(Serialize, Deserialize)]
+pub struct Roads { name: String, place: (f64, f64, f64, f64, f64), widths_m: String, #[serde(skip)] road: Vec<f32> }
+
+impl Roads {
+    pub fn new(name: &str, p: &toml::Value) -> Result<Roads, String> {
+        let mut r = Roads { name: name.into(), place: place_of("roads.major", name, p)?, widths_m: param_str(p, "widths_m", "motorway=30,trunk=20,primary=14,secondary=10,tertiary=8").into(), road: vec![] };
+        r.load()?; Ok(r)
+    }
+    fn load(&mut self) -> Result<(), String> {
+        let (lat_s, lat_n, lon_w, lon_e, res) = self.place; let grid = grid_of(lat_s, lat_n, lon_w, lon_e, res);
+        let mut fe = Fetcher::default_for(&root())?;
+        let cv = esim_registry::wildfire::context(&mut fe, lat_s, lat_n, lon_w, lon_e).ok().or_else(|| esim_registry::wildfire::cached_context(&fe, lat_s, lat_n, lon_w, lon_e));
+        self.road = rasterise_roads(cv.as_ref(), &self.widths_m, &grid).into_iter().map(|b| if b { 1.0 } else { 0.0 }).collect();
+        Ok(())
+    }
+    pub fn describe(name: &str, p: &toml::Value) -> Describe {
+        let d = place_params(Describe::new("roads.major", name, "The major roads of the window from OpenStreetMap, as the cells they cover: each road is given a width by its class and every cell under it is marked. A fire reads the marks as ground with no fuel; anything else may read them as roads."))
+            .dt("once, at the start").param("widths_m", "motorway=30,trunk=20,primary=14,secondary=10,tertiary=8", "", "the width given to each class of road, in metres; classes not named are not marked")
+            .own("roads.cells", "1").asset("osm-overpass", "the roads of the window")
+            .note("Widths are by class, not measured. Minor roads are left out.");
+        let (lat_s, lat_n, lon_w, lon_e) = (param_f64(p, "lat_s", 0.0), param_f64(p, "lat_n", 0.0), param_f64(p, "lon_w", 0.0), param_f64(p, "lon_e", 0.0));
+        match Fetcher::default_for(&root()).ok().and_then(|f| esim_registry::wildfire::cached_context(&f, lat_s, lat_n, lon_w, lon_e)) { Some(c) => d.table("context", c), None => d }
+    }
+}
+impl Module for Roads {
+    fn name(&self) -> &str { &self.name }
+    fn init(&mut self, ctx: &mut Ctx) {
+        let (a, b, c, d, r) = self.place; let g = grid_of(a, b, c, d, r);
+        ctx.world_write("roads.cells", "1", &g, self.road.clone());
+    }
+    fn handle(&mut self, _ev: &Event, _ctx: &mut Ctx) {}
+    fn snapshot(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
+    fn restore(&mut self, v: serde_json::Value) { let mut c: Roads = serde_json::from_value(v).unwrap(); c.load().expect("roads reload"); *self = c; }
+}
+
+/// The cells under the roads of a context table that have a width in `widths` ("class=metres,...").
+pub fn rasterise_roads(ctxv: Option<&serde_json::Value>, widths_m: &str, grid: &LatLonGrid) -> Vec<bool> {
+    let n = grid.nx * grid.ny;
+    let mut road = vec![false; n];
+    let metres: Vec<(f64, f64)> = (0..grid.ny).map(|r| { let (mx, my) = grid.metres_per_degree(r); (mx * grid.dlon, my * grid.dlat) }).collect();
+    let widths: std::collections::HashMap<String, f64> = widths_m.split(',').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.trim().to_string(), v.trim().parse().unwrap_or(10.0))).collect();
+    let Some(cv) = ctxv else { return road };
+    for rd in cv["roads"].as_array().into_iter().flatten() {
+        let Some(&wm) = widths.get(rd["class"].as_str().unwrap_or("")) else { continue };
+        let pts: Vec<(f64, f64)> = rd["pts"].as_array().into_iter().flatten().filter_map(|p| Some((p[0].as_f64()?, p[1].as_f64()?))).collect();
+        for seg in pts.windows(2) {
+            let (ax, ay) = seg[0]; let (bx, by) = seg[1];
+            let row_mid = (((grid.lat_n - (ay + by) / 2.0) / grid.dlat) as usize).min(grid.ny - 1);
+            let (mx, my) = metres[row_mid];
+            let len = (((bx - ax) * mx / grid.dlon).powi(2) + ((by - ay) * my / grid.dlat).powi(2)).sqrt();
+            let steps = (len / 5.0).ceil().max(1.0) as usize;
+            let half = wm / 2.0;
+            for s in 0..=steps {
+                let t = s as f64 / steps as f64; let (x, y) = (ax + (bx - ax) * t, ay + (by - ay) * t);
+                if x < grid.lon_w || x >= grid.lon_e() || y <= grid.lat_s() || y > grid.lat_n { continue; }
+                let c = ((x - grid.lon_w) / grid.dlon) as usize; let r = ((grid.lat_n - y) / grid.dlat) as usize;
+                let (rc, rr) = ((half / mx).ceil() as isize, (half / my).ceil() as isize);
+                for dr in -rr..=rr { for dc in -rc..=rc {
+                    let (cc, rrr) = (c as isize + dc, r as isize + dr);
+                    if cc < 0 || rrr < 0 || cc >= grid.nx as isize || rrr >= grid.ny as isize { continue; }
+                    if ((dc as f64 * mx).powi(2) + (dr as f64 * my).powi(2)).sqrt() <= half.max(mx * 0.5) { road[rrr as usize * grid.nx + cc as usize] = true; }
+                } }
+            }
+        }
+    }
+    road
+}
+
+/// The share of each cell under a footprint, and the mean stated height there (NaN where none).
+pub fn rasterise_buildings(bs: &[esim_registry::wildfire::Building], grid: &LatLonGrid) -> (Vec<f32>, Vec<f32>) {
+    let n = grid.nx * grid.ny;
+    let mut built_frac = vec![0.0f32; n]; let mut built_height = vec![f32::NAN; n];
+    let mut hsum = vec![0f32; n]; let mut hcnt = vec![0u16; n];
+    for b in bs {
+        // the footprint's bounding cells, then its area share by sub-sampling each cell 3x3
+        let (xs, ys): (Vec<f64>, Vec<f64>) = b.ring.iter().cloned().unzip();
+        let (x0, x1) = (xs.iter().cloned().fold(f64::INFINITY, f64::min), xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
+        let (y0, y1) = (ys.iter().cloned().fold(f64::INFINITY, f64::min), ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
+        if x1 < grid.lon_w || x0 > grid.lon_e() || y1 < grid.lat_s() || y0 > grid.lat_n { continue; }
+        let c0 = (((x0 - grid.lon_w) / grid.dlon).floor().max(0.0)) as usize; let c1 = (((x1 - grid.lon_w) / grid.dlon).floor() as usize).min(grid.nx - 1);
+        let r0 = (((grid.lat_n - y1) / grid.dlat).floor().max(0.0)) as usize; let r1 = (((grid.lat_n - y0) / grid.dlat).floor() as usize).min(grid.ny - 1);
+        let inside = |x: f64, y: f64| -> bool { let mut c = false; let m = b.ring.len(); for i in 0..m { let (xi, yi) = b.ring[i]; let (xj, yj) = b.ring[(i + 1) % m]; if (yi > y) != (yj > y) && x < xi + (y - yi) * (xj - xi) / (yj - yi) { c = !c; } } c };
+        for r in r0..=r1 { for c in c0..=c1 {
+            let mut hits = 0;
+            for sy in 0..3 { for sx in 0..3 {
+                let x = grid.lon_w + (c as f64 + (sx as f64 + 0.5) / 3.0) * grid.dlon; let y = grid.lat_n - (r as f64 + (sy as f64 + 0.5) / 3.0) * grid.dlat;
+                if inside(x, y) { hits += 1; }
+            } }
+            if hits > 0 { let k = r * grid.nx + c; built_frac[k] = (built_frac[k] + hits as f32 / 9.0).min(1.0); if b.height.is_finite() { hsum[k] += b.height as f32; hcnt[k] += 1; } }
+        } }
+    }
+    for k in 0..n { if hcnt[k] > 0 { built_height[k] = hsum[k] / hcnt[k] as f32; } }
+    (built_frac, built_height)
+}
+
+/// What the inspectors recorded for a building, as a number: 0 unknown, 1 no damage, 2 damaged, 3 destroyed.
+pub fn fate_code(damage: &str) -> u8 { if damage.starts_with("Destroyed") { 3 } else if damage.starts_with("No Damage") { 1 } else if damage.is_empty() { 0 } else { 2 } }
+
+/// `built.footprints`: the buildings of the window, as a shared table of things and as two maps.
+#[derive(Serialize, Deserialize)]
+pub struct Footprints {
+    name: String, place: (f64, f64, f64, f64, f64),
+    source: String, service: String, wh: String, key: String,
+    #[serde(skip)] bs: Vec<esim_registry::wildfire::Building>, #[serde(skip)] frac: Vec<f32>, #[serde(skip)] height: Vec<f32>,
+}
+
+impl Footprints {
+    pub fn new(name: &str, p: &toml::Value) -> Result<Footprints, String> {
+        let mut f = Footprints { name: name.into(), place: place_of("built.footprints", name, p)?, source: param_str(p, "source", "osm").into(),
+            service: param_str(p, "service", "").into(), wh: param_str(p, "where", "").into(), key: param_str(p, "key", "").into(), bs: vec![], frac: vec![], height: vec![] };
+        f.load()?; Ok(f)
+    }
+    fn load(&mut self) -> Result<(), String> {
+        let (lat_s, lat_n, lon_w, lon_e, res) = self.place; let grid = grid_of(lat_s, lat_n, lon_w, lon_e, res);
+        let mut fe = Fetcher::default_for(&root())?;
+        let fetched = match self.source.as_str() {
+            "osm" => esim_registry::wildfire::osm_buildings(&mut fe, lat_s, lat_n, lon_w, lon_e),
+            "none" => Err("no building source asked for".to_string()),
+            _ => esim_registry::wildfire::building_footprints(&mut fe, &self.service, &self.key, &self.wh),
+        };
+        self.bs = match fetched { Ok(bs) => bs, Err(e) => { eprintln!("buildings: {e}; no footprints"); vec![] } };
+        let (f, h) = rasterise_buildings(&self.bs, &grid);
+        eprintln!("buildings: {} footprints, {} cells touched", self.bs.len(), f.iter().filter(|&&x| x > 0.0).count());
+        self.frac = f; self.height = h;
+        Ok(())
+    }
+    pub fn describe(name: &str, _p: &toml::Value) -> Describe {
+        place_params(Describe::new("built.footprints", name, "The buildings of the window. Each footprint is one row of a shared table with its outline, its stated height and, where inspectors recorded it after an event, what happened to it. The same footprints are also laid on the cells as two maps: the share of each cell under a building and the mean height there. Any module may read the table: a fire to burn the buildings, people to live in them, a count to score against."))
+            .dt("once, at the start")
+            .param("source", "osm", "", "osm: OpenStreetMap buildings through Overpass, heights from the height tag or building:levels times 3.2 m, else two storeys, a guess; service: a feature service of footprints (LA County's for the 2025 fires); none").param("service", "", "", "the feature service, when source is service").param("where", "", "", "its filter").param("key", "", "", "the cache key for its pages")
+            .own("built.frac", "1").own("built.height", "ft (as stated)").own("built.footprints", "table")
+            .frame("building_height", "ft (as stated)")
+            .asset("lacounty-lariac-buildings-2025-fires", "footprints, heights and inspected damage, when source is service").asset("osm-overpass", "footprints, when source is osm")
+            .note("The table built.footprints has one row per building: columns height and fate (0 unknown, 1 no damage, 2 damaged, 3 destroyed) and the outline as a shape.").note("OpenStreetMap footprints are incomplete and carry few heights. A building is an outline and a height; what it is made of is not known here.")
+    }
+}
+impl Module for Footprints {
+    fn name(&self) -> &str { &self.name }
+    fn init(&mut self, ctx: &mut Ctx) {
+        let (a, b, c, d, r) = self.place; let g = grid_of(a, b, c, d, r);
+        ctx.world_write("built.frac", "1", &g, self.frac.clone());
+        ctx.world_write("built.height", "ft (as stated)", &g, self.height.clone());
+        ctx.field("building_height", "ft (as stated)", &g, self.height.clone());
+        let mut cols = std::collections::BTreeMap::new();
+        cols.insert("height".to_string(), self.bs.iter().map(|b| b.height).collect::<Vec<f64>>());
+        cols.insert("fate".to_string(), self.bs.iter().map(|b| fate_code(&b.damage) as f64).collect::<Vec<f64>>());
+        ctx.world_table_write("built.footprints", cols, self.bs.iter().map(|b| b.ring.clone()).collect());
+    }
+    fn handle(&mut self, _ev: &Event, _ctx: &mut Ctx) {}
+    fn snapshot(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
+    fn restore(&mut self, v: serde_json::Value) { let mut c: Footprints = serde_json::from_value(v).unwrap(); c.load().expect("footprints reload"); *self = c; }
+}

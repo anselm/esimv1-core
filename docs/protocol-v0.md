@@ -1,7 +1,7 @@
 <!-- author: Claude -->
 <!-- ordered-by: Anselm -->
 <!-- written: 2026-11-01 -->
-<!-- revised: 2026-11-07 -->
+<!-- revised: 2026-11-26 -->
 <!-- revision: 1 -->
 # The module protocol, version 0
 
@@ -116,6 +116,8 @@ These are the fifteen verbs of `Ctx` today and the message set of the wire bindi
 | `report` | series, unit, value | a scalar at the current time |
 | `field` | name, unit, grid, data | an output frame |
 | `world_write` | name, unit, grid, data | write the shared field this module owns |
+| `world_table_write` | name, columns, shapes | write the shared table of things this module owns, whole (2026-11-26) |
+| `world_table` | name | read a shared table as last written |
 | `world_read` | name | the field as last written: unit, grid, version, data |
 
 Randomness: in process, a module draws from a kernel-held xoshiro256** stream seeded from

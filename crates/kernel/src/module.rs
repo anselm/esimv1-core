@@ -125,6 +125,13 @@ impl<'a> Ctx<'a> {
         let (version, digest) = self.world.write(&self.me, name, unit, grid, data, self.now).unwrap_or_else(|e| panic!("{e}"));
         self.world_writes.push((name.to_string(), version, digest, len));
     }
+    /// Write a shared table of things, whole. The first writer owns it. Logged like a field write.
+    pub fn world_table_write(&mut self, name: &str, columns: BTreeMap<String, Vec<f64>>, shapes: Vec<Vec<(f64, f64)>>) {
+        let (version, digest, rows) = self.world.write_table(&self.me, name, columns, shapes, self.now).unwrap_or_else(|e| panic!("{e}"));
+        self.world_writes.push((name.to_string(), version, digest, rows));
+    }
+    /// Read a shared table as last written.
+    pub fn world_table(&self, name: &str) -> Option<&crate::world::WorldTable> { self.world.table(name) }
     /// Read a shared field as last written.
     pub fn world_read(&self, name: &str) -> Option<&WorldField> { self.world.get(name) }
     /// Read a shared field that must be on this module's grid. A mismatch is a manifest

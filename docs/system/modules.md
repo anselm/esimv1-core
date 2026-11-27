@@ -3,7 +3,7 @@
 <!-- author: Claude -->
 <!-- ordered-by: Anselm -->
 <!-- written: 2026-11-01 -->
-<!-- revised: 2026-11-19 -->
+<!-- revised: 2026-11-26 -->
 <!-- revision: 1 -->
 # Modules
 
@@ -24,7 +24,7 @@ During `init` and `handle` a module makes requests of the kernel and nothing els
 schedule an event to itself; send to a named instance or publish on a topic, now or at a
 time, optionally about one grid cell; subscribe to topics or to topics at cells; open a
 ledger, transfer between accounts, declare a stock; report a scalar; write a frame; write
-the world field it owns; read any world field. Fifteen verbs. The full contract is
+the world field it owns; read any world field; write the world table it owns; read any world table. Seventeen verbs. The full contract is
 `docs/protocol-v0.md`.
 
 A module is a pure function of its parameters, its seed, the events it receives and the
@@ -33,7 +33,11 @@ module may not reach around the kernel to another module or to the clock.
 
 ## What a module owns
 
-Its private state. The world fields it was first to write; nobody else may write them.
+Its private state. The world fields it was first to write; nobody else may write them. The same holds
+for a world table (2026-11-26): a shared list of things, one row per building, tank or animal, with
+numeric columns and optionally an outline per row, for what is not a map. One module writes it
+whole and others read it; a module that keeps its own state about the same things writes a table of
+its own with the rows in the same order.
 The stocks it declares in a ledger; it must keep them exactly, because the kernel
 compares its declaration with the flows every close. Its own data: a module fetches what
 it needs through the registry at build time, by catalog id, and the describe names those
@@ -123,6 +127,16 @@ in doubt, split at the point where two different people would hold different opi
   WorldCover land cover and the hour's wind from the ERA5 archive, scored against the
   incident's mapped perimeters from NIFC as each was current. The first local scenario
   after the Boone basin; the Palisades fire of January 2025 is the case.
+- The parts of a landscape (`crates/modules/src/landscape.rs`, 2026-11-26): `ground.terrain`
+  (elevation, slope, aspect), `ground.cover` (land cover codes), `roads.major` (cells under major
+  roads), `built.footprints` (every building as a row of a shared table, and as two maps),
+  `weather.surface` (each hour's wind, temperature and humidity on the cells), `fuel.moisture`
+  (how dry the dead fuel is) and `fauna.flee` (a placeholder population of animals that leaves
+  burned ground). Each reads one source and writes shared fields; none knows the others. With
+  `inputs = "world"` the fire engine below fetches nothing and reads them, which is how the three
+  cell-fire scenarios run since that day. They stand before the fire in a manifest because it
+  takes the ground from them when the run starts. All of them get their cells from the place
+  alone (`landscape::grid_of`), so two modules given one place always agree on the grid.
 - `fire.cells` (`crates/modules/src/firecells.rs`, 2026-11-03): our own engine, a heat budget
   on cells that know their ground (DEM, WorldCover, LA County building footprints, OpenStreetMap
   roads) under NOAA's HRRR 3 km wind read by the registry's own GRIB2 reader; `obs.dins`

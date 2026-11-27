@@ -27,5 +27,5 @@ pub use manifest::{Manifest, Variant};
 pub use entities::Source;
 pub use module::{Ctx, FieldSeries, Module, ModuleFactory};
 pub use time::{Duration, Time};
-pub use world::{World, WorldField};
+pub use world::{World, WorldField, WorldTable};
 pub use describe::{check, CheckReport, Describe, Describer};

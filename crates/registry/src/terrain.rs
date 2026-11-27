@@ -44,6 +44,20 @@ fn write_f32s(path: &std::path::Path, v: &[f32]) {
 /// Build (or load from cache) a window `[lat_s, lat_n] x [lon_w, lon_e]` at
 /// `res_arcsec` resolution by block-averaging the one-arc-second tiles that cover it.
 /// The window is snapped outward to whole output cells.
+/// The cells of a window, from its bounds and resolution alone: (nx, ny, cell size in degrees, west
+/// edge, north edge). Nothing is fetched. Every module of a scenario that is given the same place
+/// gets the same cells, which is how modules that never meet agree on a grid; `dem_window` lays the
+/// elevation on exactly these.
+pub fn window_grid(lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64, res_arcsec: f64) -> (usize, usize, f64, f64, f64) {
+    let d = res_arcsec / 3600.0;
+    let half = SOURCE_ARCSEC / 3600.0 / 2.0;
+    let lon_w = (lon_w / d).floor() * d - half;
+    let lat_n = (lat_n / d).ceil() * d + half;
+    let nx = ((lon_e - lon_w) / d).ceil() as usize;
+    let ny = ((lat_n - lat_s) / d).ceil() as usize;
+    (nx, ny, d, lon_w, lat_n)
+}
+
 pub fn dem_window(fetcher: &mut Fetcher, dem: &Asset, lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64, res_arcsec: f64) -> Result<DemWindow, String> {
     let d = res_arcsec / 3600.0;
     // GLO-30's pixel centres sit on whole arc-seconds. An output grid whose edges also sit on
@@ -53,11 +67,7 @@ pub fn dem_window(fetcher: &mut Fetcher, dem: &Asset, lat_s: f64, lat_n: f64, lo
     // in the Palisades window). So the grid is laid half a source pixel off the lattice: at the
     // DEM's own resolution each cell is centred on its pixel, and at coarser ones no pixel centre
     // lies on an edge.
-    let half = SOURCE_ARCSEC / 3600.0 / 2.0;
-    let lon_w = (lon_w / d).floor() * d - half;
-    let lat_n = (lat_n / d).ceil() * d + half;
-    let nx = ((lon_e - lon_w) / d).ceil() as usize;
-    let ny = ((lat_n - lat_s) / d).ceil() as usize;
+    let (nx, ny, _, lon_w, lat_n) = window_grid(lat_s, lat_n, lon_w, lon_e, res_arcsec);
     // tiles needed
     let mut keys = Vec::new();
     let mut la = (lat_n - 1e-9).floor() as i64;

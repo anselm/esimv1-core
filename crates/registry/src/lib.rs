@@ -23,5 +23,5 @@ pub const EARTH_RADIUS_M: f64 = 6_371_008.8;
 pub use catalog::{Asset, Catalog, Place};
 pub use fetch::Fetcher;
 pub use cog::Raster;
-pub use terrain::{dem_window, DemWindow};
+pub use terrain::{dem_window, window_grid, DemWindow};
 pub use hydro::FlowNet;

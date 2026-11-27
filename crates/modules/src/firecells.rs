@@ -161,90 +161,95 @@ impl Cells {
     }
 
     fn load(&mut self) -> Result<(), String> {
+        let world = self.inputs == "world";
         let root = std::env::var("ESIM_ROOT").ok().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-        let cat = Catalog::load(&root.join("data/catalog.toml"))?;
-        let dem = cat.asset("copernicus-dem-glo30").ok_or("catalog has no copernicus-dem-glo30")?;
-        let lc = cat.asset("esa-worldcover-2021").ok_or("catalog has no esa-worldcover-2021")?;
         let mut fe = Fetcher::default_for(&root)?;
-        let w = dem_window(&mut fe, dem, self.lat_s, self.lat_n, self.lon_w, self.lon_e, self.res_arcsec)?;
-        let grid = LatLonGrid { nx: w.nx, ny: w.ny, dlon: w.dlon, dlat: w.dlat, lon_w: w.lon_w, lat_n: w.lat_n };
-        let (slope, aspect) = w.slope_aspect(&fe);
-        self.elev = w.elev.clone();
-        self.cover = landcover_window(&mut fe, lc, grid.nx, grid.ny, grid.dlon, grid.dlat, grid.lon_w, grid.lat_n)?;
+        // In world mode this module fetches nothing: the grid is the place's, and the relief, land cover,
+        // buildings and roads arrive as other modules' fields and table when the run starts.
+        let (grid, slope, aspect) = if world {
+            (crate::landscape::grid_of(self.lat_s, self.lat_n, self.lon_w, self.lon_e, self.res_arcsec), Vec::new(), Vec::new())
+        } else {
+            let cat = Catalog::load(&root.join("data/catalog.toml"))?;
+            let dem = cat.asset("copernicus-dem-glo30").ok_or("catalog has no copernicus-dem-glo30")?;
+            let lc = cat.asset("esa-worldcover-2021").ok_or("catalog has no esa-worldcover-2021")?;
+            let w = dem_window(&mut fe, dem, self.lat_s, self.lat_n, self.lon_w, self.lon_e, self.res_arcsec)?;
+            let grid = LatLonGrid { nx: w.nx, ny: w.ny, dlon: w.dlon, dlat: w.dlat, lon_w: w.lon_w, lat_n: w.lat_n };
+            let (slope, aspect) = w.slope_aspect(&fe);
+            self.elev = w.elev.clone();
+            self.cover = landcover_window(&mut fe, lc, grid.nx, grid.ny, grid.dlon, grid.dlat, grid.lon_w, grid.lat_n)?;
+            (grid, slope, aspect)
+        };
         let n = grid.nx * grid.ny;
         self.area_m2 = (0..grid.ny).flat_map(|r| std::iter::repeat_n(grid.row_area(r), grid.nx)).collect();
         self.metres = (0..grid.ny).map(|r| { let (mx, my) = grid.metres_per_degree(r); (mx * grid.dlon, my * grid.dlat) }).collect();
-        // buildings: fraction of each cell under a footprint, and the mean height there
-        self.built_frac = vec![0.0; n]; self.built_height = vec![f32::NAN; n];
-        let mut hsum = vec![0f32; n]; let mut hcnt = vec![0u16; n];
         let mut bodies_src: Option<Vec<esim_registry::wildfire::Building>> = None;
-        let fetched = match self.buildings.as_str() {
-            "osm" => osm_buildings(&mut fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e),
-            "none" => Err("no building source asked for".to_string()),
-            _ => building_footprints(&mut fe, &self.buildings_service, &self.buildings_key, &self.buildings_where),
-        };
-        match fetched {
-            Ok(bs) => {
-                for b in &bs {
-                    // the footprint's bounding cells, then its area share by sub-sampling each cell 3x3
-                    let (xs, ys): (Vec<f64>, Vec<f64>) = b.ring.iter().cloned().unzip();
-                    let (x0, x1) = (xs.iter().cloned().fold(f64::INFINITY, f64::min), xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
-                    let (y0, y1) = (ys.iter().cloned().fold(f64::INFINITY, f64::min), ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
-                    if x1 < grid.lon_w || x0 > grid.lon_e() || y1 < grid.lat_s() || y0 > grid.lat_n { continue; }
-                    let c0 = (((x0 - grid.lon_w) / grid.dlon).floor().max(0.0)) as usize; let c1 = (((x1 - grid.lon_w) / grid.dlon).floor() as usize).min(grid.nx - 1);
-                    let r0 = (((grid.lat_n - y1) / grid.dlat).floor().max(0.0)) as usize; let r1 = (((grid.lat_n - y0) / grid.dlat).floor() as usize).min(grid.ny - 1);
-                    let inside = |x: f64, y: f64| -> bool { let mut c = false; let m = b.ring.len(); for i in 0..m { let (xi, yi) = b.ring[i]; let (xj, yj) = b.ring[(i + 1) % m]; if (yi > y) != (yj > y) && x < xi + (y - yi) * (xj - xi) / (yj - yi) { c = !c; } } c };
-                    for r in r0..=r1 { for c in c0..=c1 {
-                        let mut hits = 0;
-                        for sy in 0..3 { for sx in 0..3 {
-                            let x = grid.lon_w + (c as f64 + (sx as f64 + 0.5) / 3.0) * grid.dlon; let y = grid.lat_n - (r as f64 + (sy as f64 + 0.5) / 3.0) * grid.dlat;
-                            if inside(x, y) { hits += 1; }
+        self.held = vec![false; n];
+        if !world {
+            // buildings: fraction of each cell under a footprint, and the mean height there
+            self.built_frac = vec![0.0; n]; self.built_height = vec![f32::NAN; n];
+            let mut hsum = vec![0f32; n]; let mut hcnt = vec![0u16; n];
+            let fetched = match self.buildings.as_str() {
+                "osm" => osm_buildings(&mut fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e),
+                "none" => Err("no building source asked for".to_string()),
+                _ => building_footprints(&mut fe, &self.buildings_service, &self.buildings_key, &self.buildings_where),
+            };
+            match fetched {
+                Ok(bs) => {
+                    for b in &bs {
+                        // the footprint's bounding cells, then its area share by sub-sampling each cell 3x3
+                        let (xs, ys): (Vec<f64>, Vec<f64>) = b.ring.iter().cloned().unzip();
+                        let (x0, x1) = (xs.iter().cloned().fold(f64::INFINITY, f64::min), xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
+                        let (y0, y1) = (ys.iter().cloned().fold(f64::INFINITY, f64::min), ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max));
+                        if x1 < grid.lon_w || x0 > grid.lon_e() || y1 < grid.lat_s() || y0 > grid.lat_n { continue; }
+                        let c0 = (((x0 - grid.lon_w) / grid.dlon).floor().max(0.0)) as usize; let c1 = (((x1 - grid.lon_w) / grid.dlon).floor() as usize).min(grid.nx - 1);
+                        let r0 = (((grid.lat_n - y1) / grid.dlat).floor().max(0.0)) as usize; let r1 = (((grid.lat_n - y0) / grid.dlat).floor() as usize).min(grid.ny - 1);
+                        let inside = |x: f64, y: f64| -> bool { let mut c = false; let m = b.ring.len(); for i in 0..m { let (xi, yi) = b.ring[i]; let (xj, yj) = b.ring[(i + 1) % m]; if (yi > y) != (yj > y) && x < xi + (y - yi) * (xj - xi) / (yj - yi) { c = !c; } } c };
+                        for r in r0..=r1 { for c in c0..=c1 {
+                            let mut hits = 0;
+                            for sy in 0..3 { for sx in 0..3 {
+                                let x = grid.lon_w + (c as f64 + (sx as f64 + 0.5) / 3.0) * grid.dlon; let y = grid.lat_n - (r as f64 + (sy as f64 + 0.5) / 3.0) * grid.dlat;
+                                if inside(x, y) { hits += 1; }
+                            } }
+                            if hits > 0 { let k = r * grid.nx + c; self.built_frac[k] = (self.built_frac[k] + hits as f32 / 9.0).min(1.0); if b.height.is_finite() { hsum[k] += b.height as f32; hcnt[k] += 1; } }
                         } }
-                        if hits > 0 { let k = r * grid.nx + c; self.built_frac[k] = (self.built_frac[k] + hits as f32 / 9.0).min(1.0); if b.height.is_finite() { hsum[k] += b.height as f32; hcnt[k] += 1; } }
-                    } }
+                    }
+                    for k in 0..n { if hcnt[k] > 0 { self.built_height[k] = hsum[k] / hcnt[k] as f32; } }
+                    eprintln!("buildings: {} footprints, {} cells touched", bs.len(), self.built_frac.iter().filter(|&&f| f > 0.0).count());
+                    bodies_src = Some(bs);
                 }
-                for k in 0..n { if hcnt[k] > 0 { self.built_height[k] = hsum[k] / hcnt[k] as f32; } }
-                eprintln!("buildings: {} footprints, {} cells touched", bs.len(), self.built_frac.iter().filter(|&&f| f > 0.0).count());
-                bodies_src = Some(bs);
+                Err(e) => eprintln!("buildings: {e}; built-up land from land cover only"),
             }
-            Err(e) => eprintln!("buildings: {e}; built-up land from land cover only"),
-        }
-        // roads as breaks: the major roads of the window, buffered by class
-        self.road = vec![false; n]; self.held = vec![false; n];
-        let widths: std::collections::HashMap<String, f64> = self.road_widths_m.split(',').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.trim().to_string(), v.trim().parse().unwrap_or(10.0))).collect();
-        let ctxv = context(&mut fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e).ok().or_else(|| cached_context(&fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e));
-        if let Some(cv) = &ctxv {
-            for rd in cv["roads"].as_array().into_iter().flatten() {
-                let Some(&wm) = widths.get(rd["class"].as_str().unwrap_or("")) else { continue };
-                let pts: Vec<(f64, f64)> = rd["pts"].as_array().into_iter().flatten().filter_map(|p| Some((p[0].as_f64()?, p[1].as_f64()?))).collect();
-                for seg in pts.windows(2) {
-                    let (ax, ay) = seg[0]; let (bx, by) = seg[1];
-                    let row_mid = (((grid.lat_n - (ay + by) / 2.0) / grid.dlat) as usize).min(grid.ny - 1);
-                    let (mx, my) = self.metres[row_mid];
-                    let len = (((bx - ax) * mx / grid.dlon).powi(2) + ((by - ay) * my / grid.dlat).powi(2)).sqrt();
-                    let steps = (len / 5.0).ceil().max(1.0) as usize;
-                    let half = wm / 2.0;
-                    for s in 0..=steps {
-                        let t = s as f64 / steps as f64; let (x, y) = (ax + (bx - ax) * t, ay + (by - ay) * t);
-                        if x < grid.lon_w || x >= grid.lon_e() || y <= grid.lat_s() || y > grid.lat_n { continue; }
-                        let c = ((x - grid.lon_w) / grid.dlon) as usize; let r = ((grid.lat_n - y) / grid.dlat) as usize;
-                        let (rc, rr) = ((half / mx).ceil() as isize, (half / my).ceil() as isize);
-                        for dr in -rr..=rr { for dc in -rc..=rc {
-                            let (cc, rrr) = (c as isize + dc, r as isize + dr);
-                            if cc < 0 || rrr < 0 || cc >= grid.nx as isize || rrr >= grid.ny as isize { continue; }
-                            if ((dc as f64 * mx).powi(2) + (dr as f64 * my).powi(2)).sqrt() <= half.max(mx * 0.5) { self.road[rrr as usize * grid.nx + cc as usize] = true; }
-                        } }
+            // roads as breaks: the major roads of the window, buffered by class
+            self.road = vec![false; n];
+            let widths: std::collections::HashMap<String, f64> = self.road_widths_m.split(',').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.trim().to_string(), v.trim().parse().unwrap_or(10.0))).collect();
+            let ctxv = context(&mut fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e).ok().or_else(|| cached_context(&fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e));
+            if let Some(cv) = &ctxv {
+                for rd in cv["roads"].as_array().into_iter().flatten() {
+                    let Some(&wm) = widths.get(rd["class"].as_str().unwrap_or("")) else { continue };
+                    let pts: Vec<(f64, f64)> = rd["pts"].as_array().into_iter().flatten().filter_map(|p| Some((p[0].as_f64()?, p[1].as_f64()?))).collect();
+                    for seg in pts.windows(2) {
+                        let (ax, ay) = seg[0]; let (bx, by) = seg[1];
+                        let row_mid = (((grid.lat_n - (ay + by) / 2.0) / grid.dlat) as usize).min(grid.ny - 1);
+                        let (mx, my) = self.metres[row_mid];
+                        let len = (((bx - ax) * mx / grid.dlon).powi(2) + ((by - ay) * my / grid.dlat).powi(2)).sqrt();
+                        let steps = (len / 5.0).ceil().max(1.0) as usize;
+                        let half = wm / 2.0;
+                        for s in 0..=steps {
+                            let t = s as f64 / steps as f64; let (x, y) = (ax + (bx - ax) * t, ay + (by - ay) * t);
+                            if x < grid.lon_w || x >= grid.lon_e() || y <= grid.lat_s() || y > grid.lat_n { continue; }
+                            let c = ((x - grid.lon_w) / grid.dlon) as usize; let r = ((grid.lat_n - y) / grid.dlat) as usize;
+                            let (rc, rr) = ((half / mx).ceil() as isize, (half / my).ceil() as isize);
+                            for dr in -rr..=rr { for dc in -rc..=rc {
+                                let (cc, rrr) = (c as isize + dc, r as isize + dr);
+                                if cc < 0 || rrr < 0 || cc >= grid.nx as isize || rrr >= grid.ny as isize { continue; }
+                                if ((dc as f64 * mx).powi(2) + (dr as f64 * my).powi(2)).sqrt() <= half.max(mx * 0.5) { self.road[rrr as usize * grid.nx + cc as usize] = true; }
+                            } }
+                        }
                     }
                 }
             }
+            self.finish_ground(bodies_src.as_deref(), &grid);
         }
-        // the fuel kind of each cell
-        self.kind = (0..n).map(|k| {
-            if self.road[k] { return 0; }
-            if self.built_frac[k] >= 0.05 { return 4; }
-            match self.cover[k] { 10 => 3, 20 => 2, 30 | 40 | 90 => 1, 50 => 4, _ => 0 }
-        }).collect();
-        if self.structures == "on" { if let Some(bs) = &bodies_src { self.build_bodies(bs, &grid); } }
         // the wind: HRRR hours over the window, or the ERA5 point series
         let t0 = Time::parse(&self.wind_start)?.0; let t1 = Time::parse(&self.wind_end)?.0;
         // a borrowed wind: the record's hours from wind_start are played from wind_at in the run
@@ -289,6 +294,18 @@ impl Cells {
         Ok(())
     }
 
+    /// What each cell is to the fire, from the roads, the buildings and the land cover, and the
+    /// buildings as bodies when asked for. Called once the ground is known: at load when this module
+    /// read it itself, at the start of the run when other modules supplied it.
+    fn finish_ground(&mut self, bodies: Option<&[esim_registry::wildfire::Building]>, grid: &LatLonGrid) {
+        let n = grid.nx * grid.ny;
+        self.kind = (0..n).map(|k| {
+            if self.road[k] { return 0; }
+            if self.built_frac[k] >= 0.05 { return 4; }
+            match self.cover[k] { 10 => 3, 20 => 2, 30 | 40 | 90 => 1, 50 => 4, _ => 0 }
+        }).collect();
+        if self.structures == "on" { if let Some(bs) = bodies { self.build_bodies(bs, grid); } }
+    }
     /// Every footprint becomes a body: a centroid, an area, the cell it stands in, the inspectors'
     /// word on its fate, a fixed vulnerability factor, its neighbours within `house_reach_m` (with the
     /// gap between footprints, not between centres), and the wildland cells within `exposure_m`
@@ -382,13 +399,30 @@ impl Cells {
         }
     }
     /// Dead fine fuel moisture (fraction) from humidity and temperature: Simard's equilibrium, recalled.
+    /// The ground as other modules hold it, taken once: the relief, the land cover, the roads, and the
+    /// buildings both as maps and as the table of footprints. They are written when those modules
+    /// start, so they must stand before this one in the manifest.
+    fn take_ground(&mut self, ctx: &Ctx, g: &LatLonGrid) {
+        if self.world_ground { return; }
+        let need = |f: &str, from: &str| ctx.world_read_on(f, g).unwrap_or_else(|| panic!("{}: inputs = \"world\" needs the field {f}; put a {from} module before this one in the manifest", self.name)).data.clone();
+        self.elev = need("ground.elev_m", "ground.terrain"); self.slope = need("ground.slope_rad", "ground.terrain"); self.aspect = need("ground.aspect_rad", "ground.terrain");
+        self.cover = need("ground.cover_code", "ground.cover").iter().map(|&c| c as u8).collect();
+        let n = g.nx * g.ny;
+        // roads and buildings are optional: a window may have neither module
+        self.road = ctx.world_read_on("roads.cells", g).map(|f| f.data.iter().map(|&v| v > 0.0).collect()).unwrap_or_else(|| vec![false; n]);
+        self.built_frac = ctx.world_read_on("built.frac", g).map(|f| f.data.clone()).unwrap_or_else(|| vec![0.0; n]);
+        self.built_height = ctx.world_read_on("built.height", g).map(|f| f.data.clone()).unwrap_or_else(|| vec![f32::NAN; n]);
+        let bodies: Option<Vec<esim_registry::wildfire::Building>> = ctx.world_table("built.footprints").filter(|t| t.rows() > 0).map(|t| {
+            let (h, f) = (t.column("height"), t.column("fate"));
+            t.shapes.iter().enumerate().map(|(i, ring)| esim_registry::wildfire::Building { ring: ring.clone(), height: h.map(|c| c[i]).unwrap_or(f64::NAN),
+                damage: match f.map(|c| c[i] as u8).unwrap_or(0) { 3 => "Destroyed", 1 => "No Damage", 0 => "", _ => "Affected" }.to_string() }).collect()
+        });
+        self.finish_ground(bodies.as_deref(), g);
+        self.world_ground = true;
+    }
     /// The other modules' fields, read at each tick: the relief once, the hour's air and fuel dryness every time.
     fn read_world(&mut self, ctx: &Ctx, g: &LatLonGrid) {
-        if !self.world_ground {
-            let need = |f: &str| ctx.world_read_on(f, g).unwrap_or_else(|| panic!("{}: inputs = \"world\" needs the field {f}; put a ground.terrain module in the manifest", self.name)).data.clone();
-            self.elev = need("ground.elev_m"); self.slope = need("ground.slope_rad"); self.aspect = need("ground.aspect_rad");
-            self.world_ground = true;
-        }
+        self.take_ground(ctx, g);
         if let (Some(s), Some(d)) = (ctx.world_read_on("air.wind_m_s", g), ctx.world_read_on("air.wind_toward_rad", g)) {
             for k in 0..self.cell_wind.len() { self.cell_wind[k] = (s.data[k], d.data[k]); }
         }
@@ -467,12 +501,13 @@ impl Module for Cells {
     fn init(&mut self, ctx: &mut Ctx) {
         let g = self.grid.clone().unwrap();
         let n = g.nx * g.ny;
+        if self.inputs == "world" { self.take_ground(ctx, &g); }
         let counts = |kk: u8| self.kind.iter().filter(|&&k| k == kk).count();
         ctx.publish("ground.loaded", json!({ "cells": n, "wind_start": self.wind_start, "wind_at": if self.wind_at.trim().is_empty() { self.wind_start.clone() } else { self.wind_at.clone() }, "grass": counts(1), "shrub": counts(2), "tree": counts(3), "built": counts(4), "road_cells": self.road.iter().filter(|&&r| r).count(), "hrrr_hours": self.hrrr.iter().filter(|h| h.is_some()).count(), "wind": self.wind }));
         if self.inputs != "world" { ctx.field("terrain_elev_m", "m", &g, self.elev.clone()); }
-        // what each cell is, for any module that asks (animals, crews): owned here until land cover is a module of its own
+        // what each cell is to the fire, for any module that asks (animals, crews)
         ctx.world_write("ground.fuel_kind", "0 none 1 grass 2 shrub 3 tree 4 built", &g, self.kind.iter().map(|&k| k as f32).collect());
-        ctx.field("building_height", "ft (as stated)", &g, self.built_height.clone());
+        if self.inputs != "world" { ctx.field("building_height", "ft (as stated)", &g, self.built_height.clone()); }
         let fg = self.frame_grid.clone().unwrap();
         let kinds: Vec<f32> = self.kind.iter().map(|&k| k as f32).collect();
         ctx.field("fire_fuel_kind", "0 none 1 grass 2 shrub 3 tree 4 built", &fg, self.to_frame(&kinds, |b| { let mut best = (0.0f32, 0usize); for &x in b { let c = b.iter().filter(|&&y| y == x).count(); if c > best.1 { best = (x, c); } } best.0 }));
@@ -742,7 +777,7 @@ impl Cells {
             .param("ember_accept", 0.25, "", "guess: chance a structure takes an ember that lands in its cell, divided by its own factor")
             .param("structure_frame_every", "6h", "", "the one-arc-second building_arrival_h frame is written this often")
             .publish("ground.loaded", "cell counts by fuel kind, road cells, HRRR hours").publish("bodies.loaded", "structures, their recorded fates, neighbour links").publish("fire.ignition", "at a cell").publish("fire.spot", "at a cell: { from, distance_m, structure? }")
-            .param("inputs", "own", "", "own: this module loads the relief and the weather itself, as it did first; world: it reads the relief from a ground.terrain module's fields, the wind from a weather.surface module's and the dryness of dead fuel from a fuel.moisture module's, and loads none of them")
+            .param("inputs", "own", "", "own: this module loads the relief and the weather itself, as it did first; world: it fetches nothing and reads the relief, the land cover, the roads and the buildings from other modules' fields and the table of footprints when the run starts, and the wind and the dryness of dead fuel from other modules' fields each hour; those modules must stand before it in the manifest")
             .own("fire.burned_frac", "1").own("ground.fuel_kind", "0 none 1 grass 2 shrub 3 tree 4 built")
             .frame("terrain_elev_m", "m").frame("building_height", "ft (as stated)").frame("fire_fuel_kind", "0 none 1 grass 2 shrub 3 tree 4 built").frame("fire_arrival_h", "h")
             .frame("building_fate", "0 unknown 1 no damage 2 damaged 3 destroyed (the inspectors)").frame("building_arrival_h", "h")
@@ -758,7 +793,10 @@ impl Cells {
         if param_str(p, "inputs", "own") == "world" {
             d = d.read("ground.elev_m", "m", true, "the relief, from the terrain module").read("ground.slope_rad", "rad", true, "").read("ground.aspect_rad", "rad", true, "")
                 .read("air.wind_m_s", "m/s", true, "this hour's wind, from the weather module").read("air.wind_toward_rad", "rad", true, "").read("fuel.dead_moisture", "1", true, "how dry the dead fuel is, from the fuel moisture module");
-            d.frames.retain(|f| f.name != "terrain_elev_m");
+            d = d.read("ground.cover_code", "worldcover code", true, "what covers each cell, from the land cover module").read("roads.cells", "1", false, "cells under a major road carry no fuel").read("built.frac", "1", false, "the share of a cell under buildings").read("built.height", "ft (as stated)", false, "")
+                .read("built.footprints", "table", false, "every building as a body, when structures is on");
+            d.frames.retain(|f| f.name != "terrain_elev_m" && f.name != "building_height");
+            d.assets.clear();
         }
         if let Some(c) = ctx_table { d = d.table("context", c); }
         d

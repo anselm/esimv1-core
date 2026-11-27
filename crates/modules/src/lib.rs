@@ -115,6 +115,9 @@ pub static KINDS: &[Kind] = &[
     kind!("weather.surface", landscape::Surface),
     kind!("fuel.moisture", landscape::Moisture),
     kind!("fauna.flee", landscape::Flee),
+    kind!("ground.cover", landscape::Cover),
+    kind!("roads.major", landscape::Roads),
+    kind!("built.footprints", landscape::Footprints),
 ];
 
 fn find(kind: &str) -> Result<&'static Kind, String> {
@@ -227,6 +230,9 @@ pub fn title_of(kind: &str) -> &'static str {
         "weather.surface" => "Wind and air at the ground",
         "fuel.moisture" => "How dry the fuel is",
         "fauna.flee" => "Animals fleeing the fire",
+        "ground.cover" => "What covers the ground",
+        "roads.major" => "Major roads",
+        "built.footprints" => "Buildings",
         _ => "",
     }
 }
@@ -239,6 +245,8 @@ pub fn layer_of(kind: &str) -> &'static str {
         "quake.buildings" => "built",
         "fuel.moisture" => "plants",
         "ground.terrain" => "ground",
+        "ground.cover" => "plants",
+        "built.footprints" => "built",
         "fauna.flee" => "animals",
         "portland.lifelines" | "fuel.depot" => "flows",
         "health.hospitals" => "built",
