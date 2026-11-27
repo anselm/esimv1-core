@@ -175,6 +175,7 @@ pub struct Rothermel {
     max_residence_min: f64,
     substep_s: f64,
     reach_cells: i64,
+    #[serde(default)] inputs: String,   // "own": load terrain, cover and wind itself; "world": read them from the modules that hold them
     // state
     ignited: bool,
     ignited_at: Vec<f32>,      // seconds since ignition per cell, NaN unburned
@@ -197,6 +198,9 @@ pub struct Rothermel {
     #[serde(skip)] hour_stamp: u32,
     #[serde(skip)] dirs: Vec<(isize, isize)>,
     #[serde(skip)] frame_grid: Option<LatLonGrid>,
+    #[serde(skip)] cover_map: Vec<(u8, usize)>,
+    #[serde(skip)] w_spd: Vec<f32>,
+    #[serde(skip)] w_from: Vec<f32>,
 }
 
 impl Rothermel {
@@ -221,9 +225,11 @@ impl Rothermel {
             max_residence_min: param_f64(p, "max_residence_min", 120.0),
             substep_s: param_f64(p, "substep_s", 15.0),
             reach_cells: param_f64(p, "reach_cells", 3.0) as i64,
+            inputs: param_str(p, "inputs", "own").to_string(),
             ignited: false, ignited_at: Vec::new(), progress: Vec::new(), active: Vec::new(), since_ignition_s: 0.0, last_frame: i64::MIN / 4,
             grid: None, fuel_of: Vec::new(), cover: Vec::new(), fuels: Vec::new(), slope: Vec::new(), aspect: Vec::new(), wind: None, area_m2: Vec::new(), metres: Vec::new(),
             beds: Vec::new(), cell_rate: Vec::new(), stamp: Vec::new(), hour_stamp: 0, dirs: Vec::new(), frame_grid: None,
+            cover_map: Vec::new(), w_spd: Vec::new(), w_from: Vec::new(),
         };
         f.load()?;
         Ok(f)
@@ -233,23 +239,29 @@ impl Rothermel {
         let cat = Catalog::load(&root.join("data/catalog.toml"))?;
         let dem = cat.asset("copernicus-dem-glo30").ok_or("catalog has no copernicus-dem-glo30")?;
         let lc = cat.asset("esa-worldcover-2021").ok_or("catalog has no esa-worldcover-2021")?;
+        let world = self.inputs == "world";
         let mut fe = Fetcher::default_for(&root)?;
-        let w = dem_window(&mut fe, dem, self.lat_s, self.lat_n, self.lon_w, self.lon_e, self.res_arcsec)?;
-        let grid = LatLonGrid { nx: w.nx, ny: w.ny, dlon: w.dlon, dlat: w.dlat, lon_w: w.lon_w, lat_n: w.lat_n };
-        let (slope, aspect) = w.slope_aspect(&fe);
-        self.cover = landcover_window(&mut fe, lc, grid.nx, grid.ny, grid.dlon, grid.dlat, grid.lon_w, grid.lat_n)?;
+        // in world mode nothing is fetched: the grid is the place's, and the ground arrives at the start
+        let (grid, slope, aspect) = if world { (crate::landscape::grid_of(self.lat_s, self.lat_n, self.lon_w, self.lon_e, self.res_arcsec), Vec::new(), Vec::new()) } else {
+            let w = dem_window(&mut fe, dem, self.lat_s, self.lat_n, self.lon_w, self.lon_e, self.res_arcsec)?;
+            let grid = LatLonGrid { nx: w.nx, ny: w.ny, dlon: w.dlon, dlat: w.dlat, lon_w: w.lon_w, lat_n: w.lat_n };
+            let (slope, aspect) = w.slope_aspect(&fe);
+            self.cover = landcover_window(&mut fe, lc, grid.nx, grid.ny, grid.dlon, grid.dlat, grid.lon_w, grid.lat_n)?;
+            (grid, slope, aspect)
+        };
         let (mut fuels, covers) = load_fuels(&root)?;
         // the manifest may choose the shrub model
         if let Some(i) = fuels.iter().position(|m| m.id == self.shrub_fuel) { let _ = i; } else { return Err(format!("fuels.toml has no fuel {}", self.shrub_fuel)); }
         let shrub = fuels.iter().position(|m| m.id == self.shrub_fuel).unwrap();
-        self.fuel_of = self.cover.iter().map(|&c| {
-            if c == 20 { return shrub as u8; }
-            covers.iter().find(|(code, _, _)| *code == c).map(|(_, i, _)| *i as u8).unwrap_or(255)
-        }).collect();
-        let wind_lat = (self.lat_s + self.lat_n) / 2.0; let wind_lon = (self.lon_w + self.lon_e) / 2.0;
-        self.wind = Some(wind_hourly(&mut fe, wind_lat, wind_lon, &self.wind_start, &self.wind_end)?);
-        // roads, place names and city limits for the map; fetched once, carried by the describe from the cache
-        if let Err(e) = context(&mut fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e) { eprintln!("context: {e} (the map will have no roads or names)"); }
+        self.cover_map = covers.iter().map(|(code, i, _)| (*code, if *code == 20 { shrub } else { *i })).collect();
+        if !self.cover_map.iter().any(|(c, _)| *c == 20) { self.cover_map.push((20, shrub)); }
+        self.set_fuels();
+        if !world {
+            let wind_lat = (self.lat_s + self.lat_n) / 2.0; let wind_lon = (self.lon_w + self.lon_e) / 2.0;
+            self.wind = Some(wind_hourly(&mut fe, wind_lat, wind_lon, &self.wind_start, &self.wind_end)?);
+            // roads, place names and city limits for the map; fetched once, carried by the describe from the cache
+            if let Err(e) = context(&mut fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e) { eprintln!("context: {e} (the map will have no roads or names)"); }
+        }
         self.area_m2 = (0..grid.ny).flat_map(|r| std::iter::repeat_n(grid.row_area(r), grid.nx)).collect();
         self.metres = (0..grid.ny).map(|r| { let (mx, my) = grid.metres_per_degree(r); (mx * grid.dlon, my * grid.dlat) }).collect();
         // every primitive lattice direction within reach: (1,0), (1,1), (1,2), (2,1), (1,3), ... in all quadrants
@@ -270,6 +282,18 @@ impl Rothermel {
         self.frame_grid = Some(LatLonGrid { nx: grid.nx.div_ceil(k), ny: grid.ny.div_ceil(k), dlon: grid.dlon * k as f64, dlat: grid.dlat * k as f64, lon_w: grid.lon_w, lat_n: grid.lat_n });
         self.grid = Some(grid);
         Ok(())
+    }
+    fn set_fuels(&mut self) {
+        let map = &self.cover_map;
+        self.fuel_of = self.cover.iter().map(|&c| map.iter().find(|(code, _)| *code == c).map(|(_, i)| *i as u8).unwrap_or(255)).collect();
+    }
+    /// The ground from the modules that hold it: relief and land cover, once, at the start.
+    fn take_world(&mut self, ctx: &Ctx) {
+        let g = self.grid.clone().unwrap();
+        let need = |n: &str| ctx.world_read_on(n, &g).unwrap_or_else(|| panic!("{}: no {n}; with inputs = \"world\" the ground modules must stand before the fire in the manifest", self.name)).data.clone();
+        self.slope = need("ground.slope_rad"); self.aspect = need("ground.aspect_rad");
+        self.cover = need("ground.cover_code").iter().map(|&c| if c.is_finite() { c as u8 } else { 0 }).collect();
+        self.set_fuels();
     }
     /// A per-cell array reduced to the frame grid by `f` over each block (NaN-aware min or mode).
     fn to_frame(&self, v: &[f32], f: impl Fn(&[f32]) -> f32) -> Vec<f32> {
@@ -344,6 +368,7 @@ impl Module for Rothermel {
     fn name(&self) -> &str { &self.name }
     fn init(&mut self, ctx: &mut Ctx) {
         let g = self.grid.clone().unwrap();
+        if self.inputs == "world" { self.take_world(ctx); }
         ctx.subscribe("ground.break");
         ctx.publish("fuel.loaded", json!({ "fuels": self.fuels.iter().map(|f| json!({ "id": f.id, "confidence": f.confidence })).collect::<Vec<_>>(), "shrub": self.shrub_fuel, "cells": g.nx * g.ny, "burnable_cells": self.fuel_of.iter().filter(|&&f| f != 255).count() }));
         let cover_f: Vec<f32> = self.cover.iter().map(|&c| c as f32).collect();
@@ -370,10 +395,24 @@ impl Module for Rothermel {
         let now = ctx.now();
         let t_ign = Time::parse(&self.ignition_time).unwrap_or(Time(i64::MAX));
         // the hour's weather and fuel beds
-        let (mean, dir, gust, rh, t2m) = self.weather_at(now);
-        let u10 = (if self.wind_source == "gust" { gust } else { mean }).max(0.0) * self.wind_scale;
+        let world = self.inputs == "world";
+        let (mut mean, mut dir, gust, mut rh, mut t2m) = if world { (0.0, 0.0, f64::NAN, f64::NAN, f64::NAN) } else { self.weather_at(now) };
+        let mut md = dead_moisture(t2m, rh);
+        if world {
+            // the air from the weather module, cell by cell; the fuel's dryness as its mean over the window,
+            // because the fuel beds are worked out once an hour per fuel model, not per cell
+            let on = |n: &str| crate::landscape::field_on(ctx, n, &g);
+            if let (Some(s), Some(d)) = (on("air.wind_m_s"), on("air.wind_toward_rad")) {
+                self.w_from = d.iter().map(|t| ((t.to_degrees() + 180.0) % 360.0 + 360.0) % 360.0).collect(); self.w_spd = s;
+            }
+            let avg = |v: Option<Vec<f32>>| v.map(|v| { let (s, c) = v.iter().filter(|x| x.is_finite()).fold((0f64, 0u32), |(s, c), x| (s + *x as f64, c + 1)); if c > 0 { s / c as f64 } else { f64::NAN } }).unwrap_or(f64::NAN);
+            md = avg(on("fuel.dead_moisture")); if !md.is_finite() { md = 0.08; }
+            rh = avg(on("air.rh_pct")); t2m = avg(on("air.t2m_c"));
+            let k0 = self.cell_of(self.ignition_lat, self.ignition_lon).unwrap_or(0);
+            if let (Some(s), Some(d)) = (self.w_spd.get(k0), self.w_from.get(k0)) { mean = *s as f64; dir = *d as f64; }
+        }
+        let u10 = (if self.wind_source == "gust" && !world { gust } else { mean }).max(0.0) * self.wind_scale;
         let u10 = if u10.is_finite() { u10 } else { 0.0 };
-        let md = dead_moisture(t2m, rh);
         let m = [md, md + 0.01, md + 0.02, self.live_moisture_pct / 100.0, self.live_moisture_pct / 100.0];
         self.hour_stamp = self.hour_stamp.wrapping_add(1);
         for (i, fm) in self.fuels.iter().enumerate() { self.beds[i] = if fm.id == "URB" { None } else { rothermel(fm, m, self.herb_cured_frac) }; }
@@ -417,7 +456,8 @@ impl Module for Rothermel {
                         }
                         if blocked { continue; }
                         any_open = true;
-                        let (head, theta_h, ecc) = self.rate(n, u10, dir);
+                        let (cu, cd) = if world && !self.w_spd.is_empty() { ((self.w_spd[n] as f64).max(0.0) * self.wind_scale, self.w_from[n] as f64) } else { (u10, dir) };
+                        let (head, theta_h, ecc) = self.rate(n, cu, cd);
                         if head <= 0.0 { continue; }
                         let (mx, my) = self.metres[br];
                         let (ex, ny_m) = (dc as f64 * mx, -(dr as f64) * my);
@@ -439,6 +479,7 @@ impl Module for Rothermel {
         }
         let burned_m2 = self.burned_m2();
         ctx.world_write("fire.burned_frac", "1", &g, self.burned_field());
+        if world { ctx.world_write("fire.arrival_s", "s", &g, self.ignited_at.clone()); }
         if self.ignited && now.0.saturating_sub(self.last_frame) >= self.frame_every.0 {
             let fg = self.frame_grid.clone().unwrap();
             ctx.field("fire_arrival_h", "h", &fg, self.to_frame(&self.ignited_at, |b| b.iter().copied().filter(|v| !v.is_nan()).fold(f32::NAN, |m, v| if m.is_nan() || v < m { v } else { m }) / 3600.0));
@@ -450,7 +491,7 @@ impl Module for Rothermel {
         ctx.report("fire.active_cells", "cells", self.active.len() as f64);
         ctx.report("fire.ignited_cells_hour", "cells/h", newly as f64);
         ctx.report("fire.wind_m_s", "m/s", mean);
-        ctx.report("fire.gust_m_s", "m/s", gust);
+        if !world { ctx.report("fire.gust_m_s", "m/s", gust); }
         ctx.report("fire.wind_dir_deg", "deg", dir);
         ctx.report("fire.rh_pct", "%", rh);
         ctx.report("fire.t2m_c", "degC", t2m);
@@ -500,6 +541,15 @@ impl Rothermel {
             .asset("osm-overpass", "roads, place names and city limits for the map, read from the cache only")
             .note("Rothermel 1972 as Andrews 2018 sets it out; moisture by Simard 1968; wind adjustment by Albini and Baughman 1979; ellipse by Anderson 1983. All recalled; nothing tuned. The reanalysis wind under-reads Santa Ana gusts; the gust variant is the honest upper bound the data allows.");
         if let Some(c) = ctx_table { d = d.table("context", c); }
+        d = d.param("inputs", "own", "", "own: the module loads terrain, land cover and wind itself; world: it fetches nothing and reads them from the modules that hold them (ground.terrain, ground.cover, weather.surface, fuel.moisture), which must stand before it in the manifest");
+        if param_str(p, "inputs", "own") == "world" {
+            d = d.read("ground.slope_rad", "rad", true, "the relief, from the terrain module").read("ground.aspect_rad", "rad", true, "").read("ground.cover_code", "worldcover code", true, "what covers each cell, from the land cover module")
+                .read("air.wind_m_s", "m/s", true, "this hour's wind on each cell, from the weather module").read("air.wind_toward_rad", "rad", true, "").read("air.t2m_c", "degC", false, "for the report only").read("air.rh_pct", "%", false, "for the report only")
+                .read("fuel.dead_moisture", "1", true, "how dry the dead fuel is, from the fuel moisture module; its mean over the window is used")
+                .own("fire.arrival_s", "s");
+            d.assets.retain(|a| !["copernicus-dem-glo30", "esa-worldcover-2021", "open-meteo-era5-wind", "osm-overpass"].contains(&a.key.as_str()));
+            d.reports.retain(|r| r.name != "fire.gust_m_s");
+        }
         d
     }
 }

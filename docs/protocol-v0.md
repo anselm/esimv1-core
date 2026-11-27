@@ -33,7 +33,9 @@ accounts, cell addressing. The vocabulary is governed separately (see the end).
   topic says what shape to expect.
 - The **world** is a store of named fields, each a flat `f32` array on a declared
   latitude-longitude grid with a unit. The first module to write a field owns it; nobody
-  else may write it. Writes are versioned and logged by digest, not by data.
+  else may write it. Writes are versioned and logged by digest, not by data. The world also
+  holds named tables for lists of things (one row per thing, numeric columns, optionally an
+  outline per row), owned and logged the same way.
 - A **ledger** is double entry in one unit with a tolerance. Modules move amounts between
   accounts and declare the stocks they hold; the kernel closes every ledger on a cadence
   and a leak larger than the tolerance fails the run.
@@ -98,7 +100,7 @@ description that drifts from the code fails the build.
 
 ## Requests a module may make during init or handle
 
-These are the fifteen verbs of `Ctx` today and the message set of the wire binding.
+These are the seventeen verbs of `Ctx` today and the message set of the wire binding.
 
 | request | arguments | meaning |
 |---|---|---|
@@ -146,7 +148,7 @@ host  -> {"snapshot":true}          module-> {"state":<json>}
 host  -> {"restore":{"state":..}}   module-> {"done":true}
 ```
 
-A request line is one of the fifteen verbs as `{"verb":{args}}`. `world_read` is the one
+A request line is one of the seventeen verbs as `{"verb":{args}}`. `world_read` is the one
 synchronous call: the module sends `{"world_read":"name"}` and waits for
 `{"field":{"unit":..,"grid":{..},"version":..,"data":"<base64 f32 LE>"}}` before
 continuing. Fields over the wire are the cost of running out of process; a shared-memory

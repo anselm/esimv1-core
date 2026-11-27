@@ -2,12 +2,16 @@
 
 The engine of [esimv1](https://github.com/anselm/esimv1): a simulator for whole places.
 Fields, networks, populations, agents and rules run on one clock, with ledgers that must
-close at every seam and runs that replay to the same digest.
+close at every seam and runs that replay to the same digest. A scenario is assembled from
+separate modules that meet only in shared maps and tables: a fire scenario is the relief,
+land cover, roads, buildings, weather, fuel moisture, a fire model, animals and
+firefighting, each a module, and two fire models read the same parts
+(`docs/system/overview.md`).
 
 This repository is the engine alone. It reads a manifest, fetches the data its modules
 ask for, runs, and writes a run folder. Drawing a run is the job of
-[esimv1-viewer](https://github.com/anselm/esimv1-viewer); the site where people keep and
-share scenarios is [esimv1](https://github.com/anselm/esimv1).
+[esimv1-viewer](https://github.com/anselm/esimv1-viewer); the site that presents the
+scenarios is [esimv1](https://github.com/anselm/esimv1).
 
 ## What is here
 

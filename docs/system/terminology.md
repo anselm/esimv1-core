@@ -3,7 +3,7 @@
 <!-- author: Claude -->
 <!-- ordered-by: Anselm -->
 <!-- written: 2026-11-01 -->
-<!-- revised: 2026-11-04 -->
+<!-- revised: 2026-11-26 -->
 <!-- revision: 1 -->
 # Terminology
 
@@ -53,7 +53,7 @@ the carbon cycle and a future permafrost module would share one atmosphere. The 
 reads the closes to see what was spent down and what built up.
 
 **Coupling.** A relationship between two modules, in the only form the kernel has for
-one: one module writes a named thing (a topic, a field, a ledger entry) and another
+one: one module writes a named thing (a topic, a field, a table, a ledger entry) and another
 reads it and changes its own state because of it. "Ice sheets affect sea level" is a
 coupling only when a module that knows the ice publishes something the sea module
 subscribes to. A relationship the world has and the run lacks is a missing coupling.
@@ -96,8 +96,7 @@ person's description in their own words, who and when, and any variants; the man
 and `runs/`. The folder is the project.
 
 **Area.** The first path segment under `projects/` or `docs/`: a person's name or a
-topic, claimed by whoever writes there first. Areas stand in for accounts until there are
-accounts.
+topic. It names whose work a folder holds; there are no accounts.
 
 **Run.** One execution of a manifest, written to a folder named by the manifest's hash
 and the log's digest: the resolved manifest, the event log, series, map frames, ledgers,
@@ -146,6 +145,10 @@ with the flows. A leak above tolerance fails the run.
 
 **Field.** A gridded quantity. A world field is shared state one module writes and others
 read; a frame is a field snapshot written for maps.
+
+**Table.** A list of things: one row per thing (a building, say), numeric columns, and
+optionally an outline per row. A world table is shared state one module writes and others
+read, as a world field is for a map. `built.footprints` writes the first one.
 
 **Event and topic.** A message at an instant, broadcast on a topic or sent to a named
 instance, optionally about one grid cell. Topics and field names are the vocabulary; see

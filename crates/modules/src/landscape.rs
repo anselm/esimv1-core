@@ -77,7 +77,7 @@ impl Module for Terrain {
 pub struct Surface {
     name: String,
     lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64,
-    source: String, wind_use: String, start: String, end: String, at: String, dt: Duration,
+    source: String, wind_use: String, start: String, end: String, at: String, dt: Duration, #[serde(default)] res_arcsec: f64,
     #[serde(skip)] hrrr: Vec<Option<HrrrHour>>, #[serde(skip)] hrrr_t0: i64, #[serde(skip)] shift: i64, #[serde(skip)] era5: Option<WindSeries>,
 }
 
@@ -87,7 +87,7 @@ impl Surface {
         let s = |k: &str| p.get(k).and_then(|v| v.as_str()).map(String::from).ok_or(format!("weather.surface {name}: no {k}"));
         let mut w = Surface { name: name.into(), lat_s: need("lat_s")?, lat_n: need("lat_n")?, lon_w: need("lon_w")?, lon_e: need("lon_e")?,
             source: param_str(p, "source", "hrrr").into(), wind_use: param_str(p, "wind_use", "mean").into(), start: s("start")?, end: s("end")?, at: param_str(p, "at", "").into(),
-            dt: param_duration(p, "dt", "1h")?, hrrr: vec![], hrrr_t0: 0, shift: 0, era5: None };
+            dt: param_duration(p, "dt", "1h")?, res_arcsec: param_f64(p, "cell_arcsec", 0.0), hrrr: vec![], hrrr_t0: 0, shift: 0, era5: None };
         w.load()?;
         Ok(w)
     }
@@ -115,7 +115,7 @@ impl Surface {
             .param("source", "hrrr", "", "hrrr: a field over the window each hour; era5: one 25 km point, the same on every cell").param("wind_use", "mean", "", "mean or gust: which speed is written as the wind")
             .param("start", "", "", "the first hour of the record fetched").param("end", "", "", "").param("at", "", "", "the simulated instant `start` stands for, when the run borrows another day's weather; empty means `start` itself")
             .param("dt", "1h", "", "")
-            .read("ground.elev_m", "m", true, "only for its grid: the cells the air is laid on")
+            .param("cell_arcsec", 0.0, "arcsec", "the weather's own cell size; 0 lays it on the terrain's cells. The 3 km record gains nothing from 30 m cells, and a reader lays a coarser field on its own cells").read("ground.elev_m", "m", param_f64(p, "cell_arcsec", 0.0) <= 0.0, "only for its grid: the cells the air is laid on, unless the weather has its own")
             .own("air.wind_m_s", "m/s").own("air.wind_toward_rad", "rad").own("air.t2m_c", "degC").own("air.rh_pct", "%")
             .report("air.wind_mean_m_s", "m/s").report("air.rh_mean_pct", "%")
             .asset("noaa-hrrr", "the 3 km wind, gust, temperature and humidity each hour").asset("open-meteo-era5", "the point series, when source is era5")
@@ -130,7 +130,9 @@ impl Module for Surface {
     fn handle(&mut self, ev: &Event, ctx: &mut Ctx) {
         if ev.topic != "tick" { return; }
         let now = ctx.now();
-        let g = ctx.world_read("ground.elev_m").unwrap_or_else(|| panic!("{}: no ground.elev_m; a ground.terrain module must be in the manifest", self.name)).grid.clone();
+        // its own spacing if one is given (readers lay it on their cells); otherwise the terrain's cells
+        let g = if self.res_arcsec > 0.0 { grid_of(self.lat_s, self.lat_n, self.lon_w, self.lon_e, self.res_arcsec) }
+            else { ctx.world_read("ground.elev_m").unwrap_or_else(|| panic!("{}: no ground.elev_m; a ground.terrain module must be in the manifest, or give the weather cell_arcsec", self.name)).grid.clone() };
         let n = g.nx * g.ny;
         let use_gust = self.wind_use == "gust";
         let mut out: Option<[Vec<f32>; 4]> = None;
@@ -217,46 +219,138 @@ impl Module for Moisture {
 
 const WILD: &str = "wildlife";
 
-/// Animals that leave ground the fire reaches. A placeholder population, declared as one: the same
-/// number per square kilometre on every cell of wildland fuel at the start. Each hour the module
-/// reads the fire's burned cells; the animals on ground burned since the last hour either die (a
-/// stated share) or move to the nearest unburned cell, and those with no unburned ground within
-/// reach die. It says nothing about any species; it is here so that the fire has a neighbour that
-/// reacts to it, and to be replaced by a module that knows animals.
+/// Animals that run from a fire. A placeholder population, declared as one: the same number per
+/// square kilometre on every cell of tree, shrub, grass or wetland at the start. They sense the
+/// front at a distance and move away from it at a stated speed, in steps of a few minutes replayed
+/// from the fire's record of when each cell caught; those the front overtakes die at a stated share
+/// or reach the nearest unburned ground. It knows no species. It is here so that the fire has a
+/// neighbour that reacts to it, and to be replaced by a module that knows animals.
 #[derive(Serialize, Deserialize)]
 pub struct Flee {
     name: String,
-    dt: Duration, frame_every: Duration, frame_res_arcsec: f64,
-    density_km2: f64, mortality: f64, reach_m: f64,
-    animals: Vec<f64>, seen: Vec<bool>, started: bool,
-    killed: f64, moved: f64, last_frame: i64,
+    dt: Duration, step: Duration, frame_every: Duration, frame_res_arcsec: f64,
+    density_km2: f64, mortality: f64, reach_m: f64, sense_m: f64, speed_m_h: f64, #[serde(default)] crowd: f64,
+    animals: Vec<f64>, home: Vec<f64>, seen: Vec<bool>, started: bool,
+    killed: f64, caught: f64, #[serde(default)] left: f64, a_last: f32, last_frame: i64,
+}
+
+fn nb8(g: &LatLonGrid, k: usize) -> impl Iterator<Item = usize> + '_ {
+    let (c, r) = ((k % g.nx) as isize, (k / g.nx) as isize);
+    [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1)].into_iter().filter_map(move |(dc, dr)| {
+        let (nc, nr) = (c + dc, r + dr);
+        (nc >= 0 && nr >= 0 && nc < g.nx as isize && nr < g.ny as isize).then(|| nr as usize * g.nx + nc as usize)
+    })
 }
 
 impl Flee {
     pub fn new(name: &str, p: &toml::Value) -> Result<Flee, String> {
-        Ok(Flee { name: name.into(), dt: param_duration(p, "dt", "1h")?, frame_every: param_duration(p, "frame_every", "6h")?, frame_res_arcsec: param_f64(p, "frame_res_arcsec", 3.0),
-            density_km2: param_f64(p, "density_km2", 20.0), mortality: param_f64(p, "mortality", 0.1), reach_m: param_f64(p, "reach_m", 3000.0),
-            animals: vec![], seen: vec![], started: false, killed: 0.0, moved: 0.0, last_frame: i64::MIN / 4 })
+        Ok(Flee { name: name.into(), dt: param_duration(p, "dt", "1h")?, step: param_duration(p, "step", "5m")?, frame_every: param_duration(p, "frame_every", "6h")?, frame_res_arcsec: param_f64(p, "frame_res_arcsec", 3.0),
+            density_km2: param_f64(p, "density_km2", 20.0), mortality: param_f64(p, "mortality", 0.3), reach_m: param_f64(p, "reach_m", 3000.0),
+            sense_m: param_f64(p, "sense_m", 600.0), speed_m_h: param_f64(p, "speed_m_h", 3000.0), crowd: param_f64(p, "crowd", 4.0),
+            animals: vec![], home: vec![], seen: vec![], started: false, killed: 0.0, caught: 0.0, left: 0.0, a_last: f32::NAN, last_frame: i64::MIN / 4 })
     }
     pub fn describe(name: &str, p: &toml::Value) -> Describe {
-        Describe::new("fauna.flee", name, "Animals that leave ground the fire reaches. A placeholder population: the same number per square kilometre on every cell of grass, shrub or tree at the start. Each hour the animals on newly burned ground either die, at a stated share, or move to the nearest unburned cell; those with no unburned ground within reach die. Every animal is accounted for: alive, or killed by the fire.")
+        Describe::new("fauna.flee", name, "Animals that run from a fire. A placeholder population: the same number per square kilometre on every cell of tree, shrub, grass or wetland at the start. They notice the front at a stated distance and move away from it at a stated speed, a few minutes at a time, following the fire's own record of when each cell caught. Those the front overtakes die at a stated share or reach the nearest unburned ground; those driven to the edge of the modelled window leave it. Every animal is accounted for: alive, killed by the fire, or gone from the window.")
             .priority(7).dt(param_str(p, "dt", "1h"))
-            .param("dt", "1h", "", "").param("frame_every", "6h", "", "").param("frame_res_arcsec", 3.0, "arcsec", "")
-            .param("density_km2", 20.0, "1/km2", "a placeholder, not a survey: animals per square kilometre of wildland fuel at the start").param("mortality", 0.1, "", "guess: the share of animals on newly burned ground that die there")
-            .param("reach_m", 3000.0, "m", "guess: how far an animal can get in one step to unburned ground; farther than this and it dies")
-            .read("fire.burned_frac", "1", true, "the fire's burned cells, read each hour after the fire has moved").read("ground.fuel_kind", "0 none 1 grass 2 shrub 3 tree 4 built", true, "where animals start: grass, shrub and tree")
+            .param("dt", "1h", "", "how often it looks at the fire").param("step", "5m", "", "the steps the hour since the last look is replayed in, when the fire says when each cell caught").param("frame_every", "6h", "", "").param("frame_res_arcsec", 3.0, "arcsec", "")
+            .param("density_km2", 20.0, "1/km2", "a placeholder, not a survey: animals per square kilometre of habitat at the start")
+            .param("sense_m", 600.0, "m", "guess: how far from newly burning ground an animal notices the fire").param("speed_m_h", 3000.0, "m/h", "guess: how fast it moves away while it notices")
+            .param("crowd", 4.0, "", "guess: a cell holding more than this many times the starting number sheds the excess to the cells around it, a few cells each look")
+            .param("mortality", 0.3, "", "guess: the share that die of those the front overtakes").param("reach_m", 3000.0, "m", "guess: how far an overtaken animal can get across burned ground to unburned; farther and it dies")
+            .read("fire.burned_frac", "1", true, "the fire's burned cells, read after the fire has moved").read("fire.arrival_s", "s", false, "when each cell caught, to replay the hour in steps; without it the hour is one step")
+            .read("ground.cover_code", "worldcover code", true, "habitat and water, from the land cover module")
             .ledger(WILD, "individuals", 1e-3)
             .frame("animals_density_km2", "1/km2")
-            .report("fauna.alive", "individuals").report("fauna.killed_by_fire", "individuals").report("fauna.displaced", "individuals").report("fauna.fleeing_hour", "individuals/h")
-            .view("map", "Animals per square kilometre", "animals_density_km2", "they pile up along the fire's edge as they flee").view("chart", "Animals displaced so far", "fauna.displaced", "each move counted, so an animal driven twice counts twice").view("chart", "Animals killed by the fire", "fauna.killed_by_fire", "")
-            .note("No species, no behaviour, no senses: an animal moves only when its own cell has burned, and to the nearest unburned cell whatever that cell is, a road or a town included. The starting number, the share that dies and the reach are placeholders.")
+            .report("fauna.alive", "individuals").report("fauna.killed_by_fire", "individuals").report("fauna.caught", "individuals").report("fauna.displaced", "individuals").report("fauna.in_flight", "individuals").report("fauna.left_window", "individuals")
+            .view("map", "Animals per square kilometre", "animals_density_km2", "emptied ground behind the front, crowded ground ahead of it")
+            .view("chart", "Animals displaced", "fauna.displaced", "those now on ground beyond what it held at the start")
+            .view("chart", "Animals overtaken by the front", "fauna.caught", "running total").view("chart", "Animals killed by the fire", "fauna.killed_by_fire", "")
+            .note("No species, no habitat preference, no memory: an animal moves only while newly burning ground is within its sensing distance, straight away from it, across anything but water, towns and roads included. Animals outside the window never enter it. The starting number, the distance, the speed and the share that dies are placeholders. The fire does not react to the animals.")
     }
-    fn frame(&self, g: &LatLonGrid) -> (LatLonGrid, Vec<f32>) {
+    fn frame(&self, g: &LatLonGrid, v: &[f64]) -> (LatLonGrid, Vec<f32>) {
         let k = (self.frame_res_arcsec / (g.dlon * 3600.0)).round().max(1.0) as usize;
         let fg = LatLonGrid { nx: g.nx.div_ceil(k), ny: g.ny.div_ceil(k), dlon: g.dlon * k as f64, dlat: g.dlat * k as f64, lon_w: g.lon_w, lat_n: g.lat_n };
         let mut sum = vec![0f64; fg.nx * fg.ny]; let mut area = vec![0f64; fg.nx * fg.ny];
-        for r in 0..g.ny { let a = g.row_area(r); for c in 0..g.nx { let j = (r / k) * fg.nx + c / k; sum[j] += self.animals[r * g.nx + c]; area[j] += a; } }
+        for r in 0..g.ny { let a = g.row_area(r); for c in 0..g.nx { let j = (r / k) * fg.nx + c / k; sum[j] += v[r * g.nx + c]; area[j] += a; } }
         (fg, sum.iter().zip(&area).map(|(s, a)| if *a > 0.0 { (s / (a / 1e6)) as f32 } else { f32::NAN }).collect())
+    }
+    /// Crowding: no cell keeps more than `crowd` times the starting number per cell; the excess
+    /// spreads to the open unburned cells around it, a few cells' distance per look.
+    fn disperse(&mut self, g: &LatLonGrid, open: &[bool], cap: f64) {
+        let mut work: Vec<usize> = (0..self.animals.len()).filter(|&k| self.animals[k] > cap).collect();
+        for _ in 0..12 {
+            if work.is_empty() { break; }
+            let mut next = Vec::new();
+            for &k in &work {
+                let excess = self.animals[k] - cap; if excess <= 0.0 { continue; }
+                let to: Vec<usize> = nb8(g, k).filter(|&j| !self.seen[j] && open[j] && self.animals[j] < self.animals[k]).collect();
+                if to.is_empty() { continue; }
+                self.animals[k] = cap;
+                for &j in &to { self.animals[j] += excess / to.len() as f64; if self.animals[j] > cap { next.push(j); } }
+            }
+            next.sort_unstable(); next.dedup(); work = next;
+        }
+    }
+    /// One step: the cells in `batch` have just caught. The animals on them are overtaken; then the
+    /// animals within sensing distance of them move away, and those that reach the window's edge
+    /// leave it. Returns (killed, overtaken, moved away, left the window).
+    fn step(&mut self, g: &LatLonGrid, open: &[bool], batch: &[usize], cell_m: f64, step_h: f64) -> (f64, f64, f64, f64) {
+        let n = g.nx * g.ny;
+        for &k in batch { self.seen[k] = true; }
+        // overtaken: the nearest unburned open cell, searched outward through burned ground
+        let (mut killed, mut caught) = (0f64, 0f64);
+        if batch.iter().any(|&k| self.animals[k] > 0.0) {
+            let mut origin = vec![u32::MAX; n]; let mut steps = vec![0u32; n];
+            let mut queue = std::collections::VecDeque::new();
+            for &k in batch { for j in nb8(g, k) { if !self.seen[j] && open[j] && origin[j] == u32::MAX { origin[j] = j as u32; queue.push_back(j); } } }
+            let max_steps = (self.reach_m / cell_m).ceil() as u32;
+            while let Some(k) = queue.pop_front() {
+                if steps[k] >= max_steps { continue; }
+                for j in nb8(g, k) { if self.seen[j] && self.animals[j] > 0.0 && origin[j] == u32::MAX { origin[j] = origin[k]; steps[j] = steps[k] + 1; queue.push_back(j); } }
+            }
+            for &k in batch {
+                let a = self.animals[k]; if a <= 0.0 { continue; }
+                caught += a; self.animals[k] = 0.0;
+                if origin[k] == u32::MAX { killed += a; continue; }
+                let dead = a * self.mortality; killed += dead;
+                self.animals[origin[k] as usize] += a - dead;
+            }
+        }
+        // sensing: distance in cells from the newly burning ground, outward over open unburned cells
+        let sense = (self.sense_m / cell_m).ceil() as u32;
+        let moves = ((self.speed_m_h * step_h) / cell_m).round().max(1.0) as u32;
+        let depth = sense + moves;
+        let mut dist: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
+        let mut queue = std::collections::VecDeque::new();
+        for &k in batch { for j in nb8(g, k) { if !self.seen[j] && open[j] && !dist.contains_key(&j) { dist.insert(j, 1); queue.push_back(j); } } }
+        let mut near: Vec<usize> = Vec::new();
+        while let Some(k) = queue.pop_front() {
+            let d = dist[&k];
+            if d <= sense && self.animals[k] > 0.0 { near.push(k); }
+            if d >= depth { continue; }
+            for j in nb8(g, k) { if !self.seen[j] && open[j] && !dist.contains_key(&j) { dist.insert(j, d + 1); queue.push_back(j); } }
+        }
+        let far = |k: usize| dist.get(&k).copied().unwrap_or(u32::MAX);
+        let (mut moved, mut left) = (0f64, 0f64);
+        let mut arrivals: Vec<(usize, f64)> = Vec::with_capacity(near.len());
+        for &k in &near {
+            let mut at = k;
+            for _ in 0..moves {
+                let here = far(at);
+                // the farthest neighbour from the fire; among equals, one chosen by the cell, so a crowd fans out
+                let best = nb8(g, at).filter(|&j| !self.seen[j] && open[j] && far(j) > here).map(far).max();
+                let Some(best) = best else { break };
+                let ties: Vec<usize> = nb8(g, at).filter(|&j| !self.seen[j] && open[j] && far(j) == best).collect();
+                at = ties[(k.wrapping_mul(2654435761) >> 7).wrapping_add(at) % ties.len()];
+                if far(at) == u32::MAX { break; }
+            }
+            // the window is not a wall: an animal driven to its edge goes on out of the model
+            let (c, r) = (at % g.nx, at / g.nx);
+            if c == 0 || r == 0 || c + 1 == g.nx || r + 1 == g.ny { left += self.animals[k]; moved += self.animals[k]; self.animals[k] = 0.0; }
+            else if at != k { arrivals.push((at, self.animals[k])); moved += self.animals[k]; self.animals[k] = 0.0; }
+        }
+        for (k, a) in arrivals { self.animals[k] += a; }
+        (killed, caught, moved, left)
     }
 }
 
@@ -272,48 +366,80 @@ impl Module for Flee {
         let burned = ctx.world_read("fire.burned_frac").unwrap_or_else(|| panic!("{}: no fire.burned_frac; a fire module must be in the manifest", self.name));
         let g = burned.grid.clone(); let n = g.nx * g.ny;
         let burnt: Vec<bool> = burned.data.iter().map(|&b| b > 0.0).collect();
-        let kind: Vec<f32> = ctx.world_read_on("ground.fuel_kind", &g).unwrap_or_else(|| panic!("{}: no ground.fuel_kind", self.name)).data.clone();
+        let cover = field_on(ctx, "ground.cover_code", &g).unwrap_or_else(|| panic!("{}: no ground.cover_code; a ground.cover module must be in the manifest", self.name));
+        let arrival = field_on(ctx, "fire.arrival_s", &g);
+        // open ground: anything an animal can cross (not water, not outside the data)
+        let open: Vec<bool> = cover.iter().map(|&c| c.is_finite() && c > 0.0 && c != 80.0).collect();
         if !self.started {
-            self.animals = (0..n).map(|k| if (1.0..=3.0).contains(&kind[k]) && !burnt[k] { self.density_km2 * g.row_area(k / g.nx) / 1e6 } else { 0.0 }).collect();
+            let habitat = |c: f32| matches!(c as i32, 10 | 20 | 30 | 90 | 95 | 100);
+            self.animals = (0..n).map(|k| if habitat(cover[k]) && !burnt[k] { self.density_km2 * g.row_area(k / g.nx) / 1e6 } else { 0.0 }).collect();
+            self.home = self.animals.clone();
             self.seen = vec![false; n]; self.started = true;
             let total: f64 = self.animals.iter().sum();
             ctx.declare_stock(WILD, "alive", total);
         }
-        // the cells burned since the last look, and the nearest unburned ground for each: one search
-        // outward from the unburned cells that touch them, through the new burn only
-        let new: Vec<usize> = (0..n).filter(|&k| burnt[k] && !self.seen[k]).collect();
-        let (mut fleeing, mut killed, mut moved) = (0f64, 0f64, 0f64);
+        let mut new: Vec<usize> = (0..n).filter(|&k| burnt[k] && !self.seen[k]).collect();
+        let (mx, my) = g.metres_per_degree(g.ny / 2);
+        let cell_m = ((mx * g.dlon) * (my * g.dlat)).sqrt();
+        let (mut killed, mut caught, mut in_flight, mut left) = (0f64, 0f64, 0f64, 0f64);
         if !new.is_empty() {
-            let mut origin = vec![u32::MAX; n]; let mut steps = vec![0u32; n];
-            let mut queue = std::collections::VecDeque::new();
-            let nb = |k: usize| { let (c, r) = (k % g.nx, k / g.nx); [(c > 0).then(|| k - 1), (c + 1 < g.nx).then(|| k + 1), (r > 0).then(|| k - g.nx), (r + 1 < g.ny).then(|| k + g.nx)] };
-            for &k in &new { for j in nb(k).into_iter().flatten() { if !burnt[j] && kind[j] > 0.0 && origin[j] == u32::MAX { origin[j] = j as u32; queue.push_back(j); } } }
-            let (mx, _) = g.metres_per_degree(g.ny / 2);
-            let max_steps = (self.reach_m / (mx * g.dlon)).ceil() as u32;
-            while let Some(k) = queue.pop_front() {
-                if steps[k] >= max_steps { continue; }
-                for j in nb(k).into_iter().flatten() { if burnt[j] && !self.seen[j] && origin[j] == u32::MAX { origin[j] = origin[k]; steps[j] = steps[k] + 1; queue.push_back(j); } }
-            }
-            for &k in &new {
-                let a = self.animals[k]; self.seen[k] = true;
-                if a <= 0.0 { continue; }
-                fleeing += a; self.animals[k] = 0.0;
-                if origin[k] == u32::MAX { killed += a; continue; }
-                let dead = a * self.mortality; killed += dead; moved += a - dead;
-                self.animals[origin[k] as usize] += a - dead;
+            match &arrival {
+                Some(a) => {
+                    // replay the time since the last look: the cells in the order they caught
+                    new.sort_by(|&x, &y| a[x].partial_cmp(&a[y]).unwrap_or(std::cmp::Ordering::Equal));
+                    let hi = a[*new.last().unwrap()]; let lo = if self.a_last.is_finite() { self.a_last.min(a[new[0]]) } else { a[new[0]] };
+                    let step_s = self.step.as_secs_f64().max(1.0);
+                    let m = (((hi - lo) as f64 / step_s).ceil() as usize).clamp(1, (self.dt.as_secs_f64() / step_s).ceil().max(1.0) as usize);
+                    let mut from = 0usize;
+                    for j in 1..=m {
+                        let until = lo + (hi - lo) * j as f32 / m as f32;
+                        let to = if j == m { new.len() } else { from + new[from..].partition_point(|&k| a[k] <= until) };
+                        if to > from {
+                            let (k, c, f, l) = self.step(&g, &open, &new[from..to], cell_m, (hi - lo) as f64 / m as f64 / 3600.0);
+                            killed += k; caught += c; in_flight = f; left += l;
+                        } else { in_flight = 0.0; }
+                        from = to;
+                    }
+                    self.a_last = hi;
+                }
+                None => { let (k, c, f, l) = self.step(&g, &open, &new, cell_m, self.dt.as_secs_f64() / 3600.0); killed += k; caught += c; in_flight = f; left += l; }
             }
         }
+        if !new.is_empty() { let cap = self.crowd * self.density_km2 * g.row_area(g.ny / 2) / 1e6; self.disperse(&g, &open, cap); }
         if killed > 0.0 { ctx.transfer(WILD, "alive", "killed_by_fire", killed); }
-        self.killed += killed; self.moved += moved;
+        if left > 0.0 { ctx.transfer(WILD, "alive", "left_the_window", left); }
+        self.killed += killed; self.caught += caught; self.left += left;
         let alive: f64 = self.animals.iter().sum();
+        let displaced: f64 = self.animals.iter().zip(&self.home).map(|(a, h)| (a - h).max(0.0)).sum();
         ctx.declare_stock(WILD, "alive", alive);
         ctx.report("fauna.alive", "individuals", alive); ctx.report("fauna.killed_by_fire", "individuals", self.killed);
-        ctx.report("fauna.displaced", "individuals", self.moved); ctx.report("fauna.fleeing_hour", "individuals/h", fleeing);
-        if now.0 - self.last_frame >= self.frame_every.0 { let (fg, f) = self.frame(&g); ctx.field("animals_density_km2", "1/km2", &fg, f); self.last_frame = now.0; }
+        ctx.report("fauna.caught", "individuals", self.caught); ctx.report("fauna.displaced", "individuals", displaced); ctx.report("fauna.in_flight", "individuals", in_flight); ctx.report("fauna.left_window", "individuals", self.left);
+        if now.0 - self.last_frame >= self.frame_every.0 {
+            let (fg, f) = self.frame(&g, &self.animals); ctx.field("animals_density_km2", "1/km2", &fg, f);
+            self.last_frame = now.0;
+        }
         ctx.schedule_with_priority(self.dt, 7, "tick", json!(null));
     }
     fn snapshot(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
     fn restore(&mut self, v: serde_json::Value) { *self = serde_json::from_value(v).unwrap(); }
+}
+
+/// A grid's values laid on another grid: each cell takes the value of the source cell that holds
+/// its centre, or of the nearest one at the edge. For fields whose writer works at its own spacing
+/// (a weather record, a coarse survey); it does not average, so it suits a finer reader.
+pub fn resample(from: &LatLonGrid, data: &[f32], to: &LatLonGrid) -> Vec<f32> {
+    let cols: Vec<usize> = (0..to.nx).map(|c| (((to.lon(c) - from.lon_w) / from.dlon).floor().max(0.0) as usize).min(from.nx - 1)).collect();
+    let mut out = Vec::with_capacity(to.nx * to.ny);
+    for r in 0..to.ny {
+        let fr = (((from.lat_n - to.lat(r)) / from.dlat).floor().max(0.0) as usize).min(from.ny - 1);
+        for &fc in &cols { out.push(data[fr * from.nx + fc]); }
+    }
+    out
+}
+/// A shared field on a module's own cells, whatever cells its writer used.
+pub fn field_on(ctx: &Ctx, name: &str, g: &LatLonGrid) -> Option<Vec<f32>> {
+    let f = ctx.world_read(name)?;
+    Some(if &f.grid == g { f.data.clone() } else { resample(&f.grid, &f.data, g) })
 }
 
 // ---------------------------------------------------------------- the grid, and three more parts of the ground
@@ -519,4 +645,20 @@ impl Module for Footprints {
     fn handle(&mut self, _ev: &Event, _ctx: &mut Ctx) {}
     fn snapshot(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
     fn restore(&mut self, v: serde_json::Value) { let mut c: Footprints = serde_json::from_value(v).unwrap(); c.load().expect("footprints reload"); *self = c; }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_coarse_field_is_laid_on_fine_cells() {
+        // 2 x 2 cells of one degree, read on 4 x 4 cells of half a degree over the same window
+        let coarse = LatLonGrid { nx: 2, ny: 2, dlon: 1.0, dlat: 1.0, lon_w: 0.0, lat_n: 2.0 };
+        let fine = LatLonGrid { nx: 4, ny: 4, dlon: 0.5, dlat: 0.5, lon_w: 0.0, lat_n: 2.0 };
+        let out = resample(&coarse, &[1.0, 2.0, 3.0, 4.0], &fine);
+        assert_eq!(out, vec![1.0, 1.0, 2.0, 2.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 3.0, 3.0, 4.0, 4.0]);
+        // a reader whose window overhangs the writer's takes the nearest edge cell
+        let wide = LatLonGrid { nx: 3, ny: 1, dlon: 1.0, dlat: 1.0, lon_w: -1.0, lat_n: 2.0 };
+        assert_eq!(resample(&coarse, &[1.0, 2.0, 3.0, 4.0], &wide), vec![1.0, 1.0, 2.0]);
+    }
 }

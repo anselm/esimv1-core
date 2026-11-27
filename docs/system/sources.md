@@ -256,7 +256,7 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **units** class code: 10 tree cover, 20 shrubland, 30 grassland, 40 cropland, 50 built-up, 60 bare or sparse vegetation, 70 snow and ice, 80 permanent water, 90 herbaceous wetland, 95 mangroves, 100 moss and lichen; 0 no data
 - **verified** 2026-11-03 from canada1: HEAD on N33W120 answered 200, 101,202,142 bytes; gdalinfo read EPSG:4326, Byte, DEFLATE, 1024-pixel blocks; the class table was read from the file's legend and the manual's Table 3
 - **url** `https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_{tile}_Map.tif`
-- **notes** The fire modules read the window they need through the registry's windowed reader and take the most common class in each cell as its fuel class.
+- **notes** The land cover module (ground.cover) reads the window through the registry's windowed reader and takes the most common class in each cell; the fire models read it from that module and turn the class into a fuel.
 
 ### DOGAMI Open-File Report O-18-02: site ground motion and ground failure for a simulated Cascadia M9.0 and a Portland Hills fault M6.8, Clackamas, Multnomah and Washington counties
 
@@ -445,7 +445,7 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **licence** The sibling service states copyright LARIAC, County of Los Angeles, Pictometry, EagleView, CalFIRE; no licence text on this one. Attribute them; do not redistribute the footprints as a dataset.
 - **verified** 2026-11-03 from canada1: Incident_Name LIKE '%Palisades%' answered 13,292 polygons; maximum damage Destroyed 6,352, No Damage 3,780, blank 2,250, Affected 687, Minor 159, Major 64; heights 0.75 to 96, mean 21
 - **url** `https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/2025_WildFire_LARIAC_BUILDINGS_100M_Plus_DINS_MaxMin_DAMAGE_NEW/FeatureServer/0/query?where={where}&outFields=HEIGHT,DINS_MaximumDamage&outSR=4326&f=geojson&resultOffset={offset}&resultRecordCount=2000`
-- **notes** The fire engine rasterises the footprints to a cell fraction and a mean height; the 3D view extrudes them.
+- **notes** The buildings module (built.footprints) keeps every footprint as a row of a shared table and rasterises them to a cell fraction and a mean height; the fire model reads both, and the 3D view extrudes them.
 
 ### DOGAMI Open-File Report O-18-02: building footprints, neighbourhood units, jurisdictions, emergency routes, transmission structures and the Hazus loss tables
 

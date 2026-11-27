@@ -3,7 +3,7 @@
 <!-- author: Claude -->
 <!-- ordered-by: Anselm -->
 <!-- written: 2026-11-01 -->
-<!-- revised: 2026-11-22 -->
+<!-- revised: 2026-11-26 -->
 <!-- revision: 1 -->
 # Projects and runs
 
@@ -66,16 +66,14 @@ picture that sits in the folder, `![what it is](file.png)`.
 `featured = true` in `project.toml` puts the project on the front page, which shows only the
 featured scenarios as cards; `?all` lists every project under its area.
 
-## Accounts, on a public copy
+## No accounts
 
-A public, writable copy (the server started with `ESIM_PUBLIC=1`) asks who you are before it
-writes anything. Identity comes from [attest.monster](https://attest.monster): you sign in
-there with a passkey, and your attest handle is your area. You can create, run and write
-only under `/<handle>`; the first time you do, `projects/<handle>/area.toml` records the
-handle and the account's DID, and from then on the area is yours. attest checks a handle
-against its reserved and offensive word lists when it is made, so this server does not; it
-keeps only a short list of its own words (`docs`, `runs`, `kinds`, `compare`, and so on)
-that cannot be areas. A private copy, run without `ESIM_PUBLIC`, asks nobody who they are.
+The public site is a showcase. Nobody signs in, and nothing can be created or run from it. A
+scenario is made on a developer's own copy with the command line and reaches the site when the
+hub is deployed. The first path segment of an address (`/anselm/...`) still names whose work a
+scenario is. Code for signing in through a passkey service was written in early November 2026
+and is being removed (Anselm, 26 November 2026: the engine "is not yet a consumer saas product.
+But it can at least showcase good scenarios").
 
 ## A project's README
 

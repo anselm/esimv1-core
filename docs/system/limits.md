@@ -3,7 +3,7 @@
 <!-- author: Claude -->
 <!-- ordered-by: Anselm -->
 <!-- written: 2026-11-01 -->
-<!-- revised: 2026-11-19 -->
+<!-- revised: 2026-11-26 -->
 <!-- revision: 1 -->
 # Limits today
 
@@ -238,6 +238,29 @@ holds the history.
   unit.
 - Built-up land carries fire at a guessed rate; nothing about structures is physical.
   No spotting, no crown fire, no fire weather of the fire's own, no evacuation, no people.
+- The animals (`fauna.flee`, 2026-11-26) are a placeholder, there to show that a module can react to
+  the fire without the fire knowing it. One number of animals per square kilometre on every cell of
+  tree, shrub, grass or wetland; no species, no habitat preference, no memory, and a guessed rule for crowding (ground holding more than four times its starting number sheds the excess to its neighbours).
+  The distance at which they notice the fire (600 m), their speed (3 km an hour) and the share that
+  dies when the front overtakes them (0.3) are guesses with no source. They cross towns and roads as
+  if they were open ground. An animal driven to the edge of the modelled window leaves the model and
+  is counted as gone, so in a scenario where the fire takes the whole window (Devil's Gulch at
+  thresholds times 3 or 5) most of the population ends as "left the window", which says nothing about
+  what would happen to it. No count of killed or displaced animals from these runs should be quoted
+  as an estimate.
+- Fuel moisture (`fuel.moisture`) is one empirical formula for fine dead fuel from the hour's
+  temperature and humidity (Simard 1968, recalled). No rain, no dew, no memory of the day before,
+  no live fuel. Rothermel's model in the separated form uses the window's mean of it, because it
+  works out its fuel beds once an hour per fuel type and not per cell.
+- The separation of the fire scenarios into parts (2026-11-26) has these open edges. Parts see
+  each other once an hour of simulated time; the animals replay the hour from the fire's record of
+  when each cell caught, which works because the fire does not react to them. Two processes that
+  drive each other within the hour would have to be one module or take a shorter step, and that is
+  untried. A reader lays a field from coarser cells onto its own by taking the nearest value, with
+  no averaging, so a fine field read on coarse cells would be sampled, not summarised. The ground
+  modules must stand before the fire in the manifest, because it takes the ground from them when
+  the run starts; the check does not yet catch a wrong order. Two tables about the same things
+  (buildings and what a module knows about each) agree on row order only by convention.
 
 ## The coast
 
@@ -311,6 +334,9 @@ of 14 November 2026; the [project page](/anselm/portland-cascadia) gives the fig
 
 - Modules are compiled in; the wire binding is specified and not built, so a kind from
   another hand cannot yet be run without rebuilding.
+- The claim that a whole system can be assembled from separate parts rests so far on the fire
+  scenarios, Portland and Earth 2100, all written by one hand in one repository. Nobody outside
+  has yet written a part and joined it to these.
 - The vocabulary is governed by this documentation and a test, not by a published
   ontology.
 - The facade is one turn and has only run through a local model, because the Anthropic

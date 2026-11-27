@@ -3,7 +3,7 @@
 <!-- author: Claude -->
 <!-- ordered-by: Anselm -->
 <!-- written: 2026-11-01 -->
-<!-- revised: 2026-11-14 -->
+<!-- revised: 2026-11-26 -->
 <!-- revision: 1 -->
 # Layers
 
@@ -25,14 +25,14 @@ in three dimensions, each layer switched on and off.
 | number | layer | what it holds | kinds today |
 |---|---|---|---|
 | 1000 | sun | irradiance on terrain | `sun.irradiance` |
-| 2000 | ground | elevation, soil, geology | none; the relief is read from a frame |
+| 2000 | ground | elevation, soil, geology | `ground.terrain` |
 | 3000 | water | water on and in the ground, the sea, the cycles it carries | `water.basin`, `water.bucket`, `water.source`, `water.surface`, `nitrogen.basin`, `sea.thermal`, `coast.oneline` |
-| 4000 | air and weather | composition, energy, weather | `carbon.emissions`, `carbon.pools`, `carbon.gases`, `forcing.ar6`, `energy.twolayer`, `heat.slab`, `weather.era5`, `weather.heatwaves`, `climate.countries` |
-| 5000 | built structures | buildings, tanks, bridges, roads, hospitals | `quake.buildings`, `fuel.tanks`, `roads.bridges`, `roads.routes`, `health.hospitals` |
+| 4000 | air and weather | composition, energy, weather | `carbon.emissions`, `carbon.pools`, `carbon.gases`, `forcing.ar6`, `energy.twolayer`, `heat.slab`, `weather.era5`, `weather.surface`, `weather.heatwaves`, `climate.countries` |
+| 5000 | built structures | buildings, tanks, bridges, roads, hospitals | `quake.buildings`, `built.footprints`, `fuel.tanks`, `roads.major`, `roads.bridges`, `roads.routes`, `health.hospitals` |
 | 6000 | flows through the built | electricity, fuel, piped water, vehicles | `power.structures`, `fuel.depot`, `portland.lifelines` |
 | 7000 | law and money | designations and ledgers | `rules.calendar`, `policy.capacity` |
-| 8000 | plants | producers | `veg.crop` |
-| 9000 | animals | consumers and their food webs | `fauna.herbivore`, `fauna.predator` |
+| 8000 | plants | producers | `veg.crop`, `ground.cover`, `fuel.moisture` |
+| 9000 | animals | consumers and their food webs | `fauna.herbivore`, `fauna.predator`, `fauna.flee` |
 | 10000 | people | population, exposure, the aftermath | `people.countries`, `people.heat`, `people.wetbulb`, `people.agents`, `people.aftermath`, `agents.farms` |
 | | disturbances (across) | events that cut through the layers and write to several | `quake.ground`, `fire.cells`, `fire.rothermel`, `fire.suppression`, `hazard.fire`, `events.shock`, `tipping.elements`, `carbon.tipped` |
 | | the record | modules that score a run against what was observed or published | `obs.*`, `score.regions`, `story.bottomline` |

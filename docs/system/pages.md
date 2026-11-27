@@ -13,7 +13,7 @@ made for its audience: tabs, columns, commentary beside a map, whatever the stor
 
 There are two files, both beside the project's manifest:
 
-- `page.html` is the project's page. It takes the place of the automatic 3D view and the README.
+- `page.html` is the project's page. It takes the place of the README.
 - `run.html` is the page for every run of the project. It takes the place of the automatic list
   of panels. A link at the foot of the page, and `?raw` on the address, still show everything the
   run recorded as the engine lays it out.

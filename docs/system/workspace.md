@@ -3,7 +3,7 @@
 <!-- author: Claude -->
 <!-- ordered-by: Anselm -->
 <!-- written: 2026-11-01 -->
-<!-- revised: 2026-11-22 -->
+<!-- revised: 2026-11-26 -->
 <!-- revision: 1 -->
 # Workspace
 
@@ -18,7 +18,7 @@ projects/      <area>/<name>/ project folders; runs inside them are not in git
 runs/          loose runs, not in git
 docs/          this documentation: <area>/<name>.md; protocol-v0.md
 devlog/        dated entries: the design brief and every decision since
-web/           the viewer and the server
+web/           the site and its server (the components that draw a run are the viewer, a repository of its own)
 todo.md        open work, one line each, pointing into the devlog
 ```
 
@@ -32,10 +32,9 @@ folders without that prefix.
 ## Areas
 
 The first path segment under `projects/` and `docs/` is an area: a person's name or a
-topic. There are no accounts; an area belongs to whoever writes there first, and the
-convention is that others do not write into it. `system` is the documentation of the
-simulator itself and `anselm` is its author's; a visitor picks a word and it is theirs.
-When accounts arrive, areas map to them without moving anything.
+topic. There are no accounts. An area names whose work a folder holds, and the convention
+is that others do not write into it. `system` is the documentation of the simulator itself
+and `anselm` is its author's. The public site is read-only, so a visitor cannot make one.
 
 ## Stamps
 

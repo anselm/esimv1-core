@@ -423,10 +423,11 @@ impl Cells {
     /// The other modules' fields, read at each tick: the relief once, the hour's air and fuel dryness every time.
     fn read_world(&mut self, ctx: &Ctx, g: &LatLonGrid) {
         self.take_ground(ctx, g);
-        if let (Some(s), Some(d)) = (ctx.world_read_on("air.wind_m_s", g), ctx.world_read_on("air.wind_toward_rad", g)) {
-            for k in 0..self.cell_wind.len() { self.cell_wind[k] = (s.data[k], d.data[k]); }
+        // the air may be on its own coarser cells; it is laid on the fire's
+        if let (Some(s), Some(d)) = (crate::landscape::field_on(ctx, "air.wind_m_s", g), crate::landscape::field_on(ctx, "air.wind_toward_rad", g)) {
+            for k in 0..self.cell_wind.len() { self.cell_wind[k] = (s[k], d[k]); }
         }
-        if let Some(m) = ctx.world_read_on("fuel.dead_moisture", g) { self.cell_moist.copy_from_slice(&m.data); }
+        if let Some(m) = crate::landscape::field_on(ctx, "fuel.dead_moisture", g) { self.cell_moist.copy_from_slice(&m); }
     }
     fn dead_moisture(t_c: f32, rh: f32) -> f32 {
         let t = t_c * 9.0 / 5.0 + 32.0; let h = rh.clamp(0.0, 100.0);
@@ -696,6 +697,7 @@ impl Module for Cells {
         }
         let burned = self.burned_m2();
         ctx.world_write("fire.burned_frac", "1", &g, self.t_ign.iter().map(|v| if v.is_nan() { 0.0 } else { 1.0 }).collect());
+        if self.inputs == "world" { ctx.world_write("fire.arrival_s", "s", &g, self.t_ign.clone()); }
         if self.ignited && now.0.saturating_sub(self.last_frame) >= self.frame_every.0 {
             let fg = self.frame_grid.clone().unwrap();
             ctx.field("fire_arrival_h", "h", &fg, self.to_frame(&self.t_ign, |b| b.iter().copied().filter(|v| !v.is_nan()).fold(f32::NAN, |m, v| if m.is_nan() || v < m { v } else { m }) / 3600.0));
@@ -796,6 +798,7 @@ impl Cells {
             d = d.read("ground.cover_code", "worldcover code", true, "what covers each cell, from the land cover module").read("roads.cells", "1", false, "cells under a major road carry no fuel").read("built.frac", "1", false, "the share of a cell under buildings").read("built.height", "ft (as stated)", false, "")
                 .read("built.footprints", "table", false, "every building as a body, when structures is on");
             d.frames.retain(|f| f.name != "terrain_elev_m" && f.name != "building_height");
+            d = d.own("fire.arrival_s", "s");
             d.assets.clear();
         }
         if let Some(c) = ctx_table { d = d.table("context", c); }

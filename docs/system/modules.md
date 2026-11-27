@@ -45,9 +45,11 @@ assets so a manifest can be checked for data before anything is fetched.
 
 ## Why describe exists
 
-The describe is the module's surface in words a program can read: parameters with
+The describe is the module's surface in words a program can read: a title in plain words
+(`energy.twolayer` is "Ocean and surface heat"), which the wiring diagram and the kinds
+page lead with; parameters with
 defaults, units and provenance notes; topics published, sent, accepted and subscribed;
-fields owned and read, with units and whether the read is required; ledgers with units
+fields and tables owned and read, with units and whether the read is required; ledgers with units
 and tolerances; output frames and series; data assets; notes. From the descriptions of a
 manifest's modules the kernel derives errors (a required read nobody writes, two writers
 of one field, a ledger in two units, a send to nobody, an asset not in the catalog),
@@ -70,7 +72,7 @@ that. `devlog/20261102-why-it-reads-mild.md` has the reasoning.
 
 ## The pool
 
-There are forty-six kinds today, all in one repository. There will be hundreds, then
+There are sixty kinds today, all in one repository. There will be hundreds, then
 thousands, from many hands, and they will live at URLs: a release, an OCI image, a wasm
 file, locked by content hash in the manifest the way the catalog locks data. The kernel
 cannot tell an in-process module from one over a pipe, and the protocol document
@@ -130,16 +132,22 @@ in doubt, split at the point where two different people would hold different opi
 - The parts of a landscape (`crates/modules/src/landscape.rs`, 2026-11-26): `ground.terrain`
   (elevation, slope, aspect), `ground.cover` (land cover codes), `roads.major` (cells under major
   roads), `built.footprints` (every building as a row of a shared table, and as two maps),
-  `weather.surface` (each hour's wind, temperature and humidity on the cells), `fuel.moisture`
-  (how dry the dead fuel is) and `fauna.flee` (a placeholder population of animals that leaves
-  burned ground). Each reads one source and writes shared fields; none knows the others. With
-  `inputs = "world"` the fire engine below fetches nothing and reads them, which is how the three
-  cell-fire scenarios run since that day. They stand before the fire in a manifest because it
+  `weather.surface` (each hour's wind, temperature and humidity, on the terrain's cells or
+  on coarser cells of its own with `cell_arcsec`), `fuel.moisture` (how dry the dead fuel is)
+  and `fauna.flee` (a placeholder population of animals that senses the front at a distance
+  and runs from it, replaying each hour in five-minute steps from the fire's record of when
+  each cell caught). Each reads one source and writes shared fields; none knows the others. With
+  `inputs = "world"` both fire models, `fire.cells` and `fire.rothermel`, fetch nothing and
+  read them, which is how all five fire scenarios run since that day. A fire in this form also
+  writes `fire.arrival_s`, the second each cell caught, so a neighbour can follow the front
+  within the hour. A reader lays a field written on other cells onto its own with
+  `landscape::field_on`. They stand before the fire in a manifest because it
   takes the ground from them when the run starts. All of them get their cells from the place
   alone (`landscape::grid_of`), so two modules given one place always agree on the grid.
 - `fire.cells` (`crates/modules/src/firecells.rs`, 2026-11-03): our own engine, a heat budget
-  on cells that know their ground (DEM, WorldCover, LA County building footprints, OpenStreetMap
-  roads) under NOAA's HRRR 3 km wind read by the registry's own GRIB2 reader; `obs.dins`
+  on cells. It was written as one module that loaded its own ground (DEM, WorldCover, LA County
+  building footprints, OpenStreetMap roads) and NOAA's HRRR 3 km wind; since 2026-11-26 the
+  scenarios run it with `inputs = "world"`, reading all of that from the modules above. `obs.dins`
   counts CAL FIRE's inspected structures against any fire's burned cells. A run page shows a
   declared `scene` view in three dimensions (terrain, buildings, arrival). Rothermel stays as
   the baseline anyone can run beside it; the engine is where the work goes, and its direction
@@ -158,15 +166,16 @@ in doubt, split at the point where two different people would hold different opi
   detection's half-pixel as seen burning by then, and at a fixed cadence scores the fire module's
   burned cells against it with the same measures as `obs.perimeters` (acres, Sørensen, missed,
   overrun), so a README table reads either. The seen area is a floor on the burned area: cloud, smoke
-  and the gaps between passes. First used for Fort McMurray 2016. `fire.cells` can take its buildings
-  from OpenStreetMap (`buildings = "osm"`) where no county footprint service exists.
-- `score.regions` (`crates/modules/src/score.rs`, 2026-11-05): the world scored by region for the globe
-  view. Nine bands per country, each a World Bank indicator (`registry::worldbank::latest_by_country`,
+  and the gaps between passes. First used for Fort McMurray 2016, where `built.footprints` takes its
+  buildings from OpenStreetMap (`source = "osm"`) because no county footprint service exists.
+- `score.regions` (`crates/modules/src/score.rs`, 2026-11-05): the world scored by region. Nine bands per country, each a World Bank indicator (`registry::worldbank::latest_by_country`,
   anonymous API, latest value per ISO3) ranked among the countries that report it to a 0 to 1 score; the
   total the mean of the bands present. Published as a `region.scored` table (countries with centroids and
   scores) every few years and yearly from 2020; moved by `people.crossing` and `shock.crossing` under
-  placeholder rules declared as parameters. The viewer's `Globe.svelte` draws the table at the cursor as
-  stacked glyphs on a sphere with the Natural Earth outlines.
+  placeholder rules declared as parameters. The viewer draws the table at the cursor as a flat map of
+  countries coloured by how each has changed since the run began (`RegionMap.svelte`, the
+  `<esim-regions>` tag); a globe with stacked glyphs was the first form and was dropped on 2026-11-26
+  because it could not be read.
 - `policy.capacity` (`crates/modules/src/capacity.rs`, 2026-11-07): derailment, after Dyke's argument in The
   Conversation (2026-11-05) that the consequences of climate change erode the capacity to address its causes.
   A world capacity to cut emissions, 0 to 1, moved each January toward a target set by the share of the world's
