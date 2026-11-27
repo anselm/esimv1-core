@@ -34,6 +34,7 @@ pub struct Cells {
     lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64, res_arcsec: f64,
     dt: Duration, substep_s: f64, frame_every: Duration, frame_res_arcsec: f64,
     ignition_time: String, ignition_lat: f64, ignition_lon: f64,
+    #[serde(default)] inputs: String,   // own: load terrain and weather here (the first form); world: read them from other modules' fields
     wind: String,            // hrrr | era5
     wind_use: String,        // mean | gust
     wind_start: String, wind_end: String,
@@ -83,6 +84,7 @@ pub struct Cells {
     #[serde(skip)] built_frac: Vec<f32>,
     #[serde(skip)] built_height: Vec<f32>,
     #[serde(skip)] road: Vec<bool>,
+    #[serde(skip)] world_ground: bool,
     #[serde(skip)] held: Vec<bool>,      // under a ground.break (fire.suppression's lines), from its time on
     held_cells: usize, breaks_taken: usize,
     #[serde(skip)] kind: Vec<u8>,          // 0 none, 1 grass, 2 shrub, 3 tree, 4 built
@@ -106,7 +108,7 @@ pub struct Cells {
     #[serde(skip)] cell_home: std::collections::HashMap<usize, Vec<u32>>,           // structures standing in a cell
 }
 
-fn civil(t: i64) -> (String, u8) {
+pub(crate) fn civil(t: i64) -> (String, u8) {
     let iso = Time(t).to_iso();
     (iso[..10].replace('-', ""), iso[11..13].parse().unwrap_or(0))
 }
@@ -121,6 +123,7 @@ impl Cells {
             frame_every: param_duration(p, "frame_every", "1h")?, frame_res_arcsec: param_f64(p, "frame_res_arcsec", 3.0),
             ignition_time: param_str(p, "ignition_time", "2025-01-07T18:30:00Z").to_string(),
             ignition_lat: param_f64(p, "ignition_lat", 34.0723), ignition_lon: param_f64(p, "ignition_lon", -118.5451),
+            inputs: param_str(p, "inputs", "own").to_string(),
             wind: param_str(p, "wind", "hrrr").to_string(), wind_use: param_str(p, "wind_use", "mean").to_string(),
             wind_start: param_str(p, "wind_start", "2025-01-07T18:00:00Z").to_string(), wind_end: param_str(p, "wind_end", "2025-01-12T00:00:00Z").to_string(),
             wind_at: param_str(p, "wind_at", "").to_string(),
@@ -149,7 +152,7 @@ impl Cells {
             s_t_ign: Vec::new(), s_t_out: Vec::new(), s_heat: Vec::new(), s_heat_t: Vec::new(), s_active: Vec::new(), last_s_frame: i64::MIN / 4,
             ignited: false, since_ignition_s: 0.0, last_frame: i64::MIN / 4,
             t_ign: Vec::new(), t_out: Vec::new(), heat: Vec::new(), heat_t: Vec::new(), active: Vec::new(), spots: 0, held_cells: 0, breaks_taken: 0,
-            grid: None, frame_grid: None, elev: Vec::new(), slope: Vec::new(), aspect: Vec::new(), cover: Vec::new(), built_frac: Vec::new(), built_height: Vec::new(), road: Vec::new(), held: Vec::new(), kind: Vec::new(),
+            grid: None, frame_grid: None, elev: Vec::new(), slope: Vec::new(), aspect: Vec::new(), cover: Vec::new(), built_frac: Vec::new(), built_height: Vec::new(), road: Vec::new(), world_ground: false, held: Vec::new(), kind: Vec::new(),
             area_m2: Vec::new(), metres: Vec::new(), hrrr: Vec::new(), hrrr_t0: 0, wind_shift: 0, era5: None, cell_wind: Vec::new(), cell_moist: Vec::new(), jitter: Vec::new(), offsets: Vec::new(),
             s_cell: Vec::new(), s_area: Vec::new(), s_fate: Vec::new(), s_jitter: Vec::new(), s_neigh: Vec::new(), cell_structs: Default::default(), cell_home: Default::default(),
         };
@@ -248,7 +251,9 @@ impl Cells {
         let t_at = if self.wind_at.trim().is_empty() { t0 } else { Time::parse(&self.wind_at)?.0 };
         self.hrrr_t0 = t_at;
         self.wind_shift = t0 - t_at;
-        if self.wind == "hrrr" {
+        if self.inputs == "world" {
+            // the air comes from a weather module's fields each hour; nothing is fetched here
+        } else if self.wind == "hrrr" {
             let hours = ((t1 - t0) / 3600).max(1) as usize + 1;
             self.hrrr = Vec::with_capacity(hours);
             for h in 0..hours {
@@ -377,6 +382,18 @@ impl Cells {
         }
     }
     /// Dead fine fuel moisture (fraction) from humidity and temperature: Simard's equilibrium, recalled.
+    /// The other modules' fields, read at each tick: the relief once, the hour's air and fuel dryness every time.
+    fn read_world(&mut self, ctx: &Ctx, g: &LatLonGrid) {
+        if !self.world_ground {
+            let need = |f: &str| ctx.world_read_on(f, g).unwrap_or_else(|| panic!("{}: inputs = \"world\" needs the field {f}; put a ground.terrain module in the manifest", self.name)).data.clone();
+            self.elev = need("ground.elev_m"); self.slope = need("ground.slope_rad"); self.aspect = need("ground.aspect_rad");
+            self.world_ground = true;
+        }
+        if let (Some(s), Some(d)) = (ctx.world_read_on("air.wind_m_s", g), ctx.world_read_on("air.wind_toward_rad", g)) {
+            for k in 0..self.cell_wind.len() { self.cell_wind[k] = (s.data[k], d.data[k]); }
+        }
+        if let Some(m) = ctx.world_read_on("fuel.dead_moisture", g) { self.cell_moist.copy_from_slice(&m.data); }
+    }
     fn dead_moisture(t_c: f32, rh: f32) -> f32 {
         let t = t_c * 9.0 / 5.0 + 32.0; let h = rh.clamp(0.0, 100.0);
         let m = if h < 10.0 { 0.03229 + 0.281073 * h - 0.000578 * h * t } else if h < 50.0 { 2.22749 + 0.160107 * h - 0.01478 * t } else { 21.0606 + 0.005565 * h * h - 0.00035 * h * t - 0.483199 * h };
@@ -384,6 +401,7 @@ impl Cells {
     }
     /// This hour's wind and moisture on every cell.
     fn set_hour(&mut self, now: Time) {
+        if self.inputs == "world" { return; }
         let g = self.grid.clone().unwrap();
         let use_gust = self.wind_use == "gust";
         if self.wind == "hrrr" {
@@ -451,7 +469,9 @@ impl Module for Cells {
         let n = g.nx * g.ny;
         let counts = |kk: u8| self.kind.iter().filter(|&&k| k == kk).count();
         ctx.publish("ground.loaded", json!({ "cells": n, "wind_start": self.wind_start, "wind_at": if self.wind_at.trim().is_empty() { self.wind_start.clone() } else { self.wind_at.clone() }, "grass": counts(1), "shrub": counts(2), "tree": counts(3), "built": counts(4), "road_cells": self.road.iter().filter(|&&r| r).count(), "hrrr_hours": self.hrrr.iter().filter(|h| h.is_some()).count(), "wind": self.wind }));
-        ctx.field("terrain_elev_m", "m", &g, self.elev.clone());
+        if self.inputs != "world" { ctx.field("terrain_elev_m", "m", &g, self.elev.clone()); }
+        // what each cell is, for any module that asks (animals, crews): owned here until land cover is a module of its own
+        ctx.world_write("ground.fuel_kind", "0 none 1 grass 2 shrub 3 tree 4 built", &g, self.kind.iter().map(|&k| k as f32).collect());
         ctx.field("building_height", "ft (as stated)", &g, self.built_height.clone());
         let fg = self.frame_grid.clone().unwrap();
         let kinds: Vec<f32> = self.kind.iter().map(|&k| k as f32).collect();
@@ -471,6 +491,7 @@ impl Module for Cells {
         let g = self.grid.clone().unwrap();
         let now = ctx.now();
         self.set_hour(now);
+        if self.inputs == "world" { self.read_world(ctx, &g); }
         let t_ign = Time::parse(&self.ignition_time).unwrap_or(Time(i64::MAX));
         if !self.ignited && now.0 >= t_ign.0 {
             if let Some(c) = self.cell_of(self.ignition_lat, self.ignition_lon) {
@@ -721,7 +742,8 @@ impl Cells {
             .param("ember_accept", 0.25, "", "guess: chance a structure takes an ember that lands in its cell, divided by its own factor")
             .param("structure_frame_every", "6h", "", "the one-arc-second building_arrival_h frame is written this often")
             .publish("ground.loaded", "cell counts by fuel kind, road cells, HRRR hours").publish("bodies.loaded", "structures, their recorded fates, neighbour links").publish("fire.ignition", "at a cell").publish("fire.spot", "at a cell: { from, distance_m, structure? }")
-            .own("fire.burned_frac", "1")
+            .param("inputs", "own", "", "own: this module loads the relief and the weather itself, as it did first; world: it reads the relief from a ground.terrain module's fields, the wind from a weather.surface module's and the dryness of dead fuel from a fuel.moisture module's, and loads none of them")
+            .own("fire.burned_frac", "1").own("ground.fuel_kind", "0 none 1 grass 2 shrub 3 tree 4 built")
             .frame("terrain_elev_m", "m").frame("building_height", "ft (as stated)").frame("fire_fuel_kind", "0 none 1 grass 2 shrub 3 tree 4 built").frame("fire_arrival_h", "h")
             .frame("building_fate", "0 unknown 1 no damage 2 damaged 3 destroyed (the inspectors)").frame("building_arrival_h", "h")
             .report("fire.buildings_ignited", "count").report("fire.buildings_burning", "count").report("fit.buildings_destroyed_reached", "count").report("fit.buildings_undamaged_reached", "count").report("fit.buildings_recall", "1").report("fit.buildings_precision", "1")
@@ -733,6 +755,11 @@ impl Cells {
             .view("map", "Arrival time", "fire_arrival_h", "hours since ignition").view("map", "What each cell is", "fire_fuel_kind", "")
             .view("chart", "Burned area", "fire.burned_acres", "").view("chart", "Buildings the model has lit", "fire.buildings_ignited", "against the inspectors' record: recall and precision in the series").view("chart", "Wind at the ignition point", "fire.wind_m_s", "HRRR 3 km").view("chart", "Spot fires", "fire.spots_hour", "")
             .note("Not Rothermel: a heat budget with guessed constants, built to be fitted against the mapped perimeters and the inspected structures. The HRRR reader was cross-checked against GDAL at the ignition point. Nothing physical about structures beyond a threshold, an intensity and a burn time.");
+        if param_str(p, "inputs", "own") == "world" {
+            d = d.read("ground.elev_m", "m", true, "the relief, from the terrain module").read("ground.slope_rad", "rad", true, "").read("ground.aspect_rad", "rad", true, "")
+                .read("air.wind_m_s", "m/s", true, "this hour's wind, from the weather module").read("air.wind_toward_rad", "rad", true, "").read("fuel.dead_moisture", "1", true, "how dry the dead fuel is, from the fuel moisture module");
+            d.frames.retain(|f| f.name != "terrain_elev_m");
+        }
         if let Some(c) = ctx_table { d = d.table("context", c); }
         d
     }

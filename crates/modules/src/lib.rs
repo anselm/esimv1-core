@@ -40,6 +40,7 @@ pub mod surfacewater;
 pub mod hospitals;
 pub mod agents;
 pub mod losses;
+pub mod landscape;
 
 use esim_kernel::describe::Describe;
 use esim_kernel::Module;
@@ -110,6 +111,10 @@ pub static KINDS: &[Kind] = &[
     kind!("health.hospitals", hospitals::Hospitals),
     kind!("people.agents", agents::Agents),
     kind!("obs.losses", losses::Losses),
+    kind!("ground.terrain", landscape::Terrain),
+    kind!("weather.surface", landscape::Surface),
+    kind!("fuel.moisture", landscape::Moisture),
+    kind!("fauna.flee", landscape::Flee),
 ];
 
 fn find(kind: &str) -> Result<&'static Kind, String> {
@@ -218,6 +223,10 @@ pub fn title_of(kind: &str) -> &'static str {
         "health.hospitals" => "Hospitals",
         "people.agents" => "People, one by one",
         "obs.losses" => "Loss estimates on record",
+        "ground.terrain" => "The relief",
+        "weather.surface" => "Wind and air at the ground",
+        "fuel.moisture" => "How dry the fuel is",
+        "fauna.flee" => "Animals fleeing the fire",
         _ => "",
     }
 }
@@ -228,6 +237,9 @@ pub fn layer_of(kind: &str) -> &'static str {
     match kind {
         "quake.ground" | "hazard.fire" | "carbon.tipped" => "across",
         "quake.buildings" => "built",
+        "fuel.moisture" => "plants",
+        "ground.terrain" => "ground",
+        "fauna.flee" => "animals",
         "portland.lifelines" | "fuel.depot" => "flows",
         "health.hospitals" => "built",
         "agents.farms" => "people",
