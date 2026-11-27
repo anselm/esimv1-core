@@ -48,6 +48,7 @@ impl Terrain {
     }
     pub fn describe(name: &str, _p: &toml::Value) -> Describe {
         Describe::new("ground.terrain", name, "The relief of the window: elevation from the Copernicus 30 m model resampled to the window's cells, and the slope and aspect of each cell. It owns the grid: every other module of the scenario takes its cells from these fields. Nothing here changes during a run.")
+            .dt("once, at the start")
             .param("lat_s", 0.0, "deg", "from the place").param("lat_n", 0.0, "deg", "").param("lon_w", 0.0, "deg", "").param("lon_e", 0.0, "deg", "").param("res_arcsec", 1.0, "arcsec", "")
             .own("ground.elev_m", "m").own("ground.slope_rad", "rad").own("ground.aspect_rad", "rad")
             .frame("terrain_elev_m", "m")
