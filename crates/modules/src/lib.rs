@@ -146,6 +146,25 @@ fn with_place(params: &toml::Value) -> std::borrow::Cow<'_, toml::Value> {
     std::borrow::Cow::Owned(p)
 }
 
+/// The warehouse product a module reads for `what` (roads, names, buildings, shore): the key of that
+/// name in the manifest's `data` table, which a script states once and hands to each module as it
+/// hands `place`. Empty when none is named. Products are addresses in an esimv1-data store.
+pub(crate) fn data_of(params: &toml::Value, what: &str) -> String {
+    params.get("data").and_then(|d| d.get(what)).and_then(|v| v.as_str()).unwrap_or("").to_string()
+}
+/// The roads and names of the manifest's `data` as a map table: read from the warehouse (and kept
+/// reduced in the cache), or None with a line on stderr.
+pub(crate) fn map_context(roads: &str, names: &str) -> Option<serde_json::Value> {
+    if roads.is_empty() && names.is_empty() { return None; }
+    let mut fe = esim_registry::Fetcher::default_for(&esim_registry::paths::root()).ok()?;
+    match esim_registry::warehouse::context(&mut fe, roads, names) { Ok(v) => Some(v), Err(e) => { eprintln!("context: {e} (the map will have no roads or names)"); None } }
+}
+/// The same table if a run has already made it; never fetches (for a describe).
+pub(crate) fn cached_map_context(params: &toml::Value) -> Option<serde_json::Value> {
+    let fe = esim_registry::Fetcher::default_for(&esim_registry::paths::root()).ok()?;
+    esim_registry::warehouse::cached_context(&fe, &data_of(params, "roads"), &data_of(params, "names"))
+}
+
 /// Describe a kind under a name and parameters without building it. Nothing is fetched.
 pub fn describe(kind: &str, name: &str, params: &toml::Value) -> Result<Describe, String> {
     let mut d = (find(kind)?.describe)(name, &with_place(params));

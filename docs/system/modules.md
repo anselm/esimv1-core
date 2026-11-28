@@ -3,7 +3,7 @@
 <!-- author: Claude -->
 <!-- ordered-by: Anselm -->
 <!-- written: 2026-11-01 -->
-<!-- revised: 2026-11-26 -->
+<!-- revised: 2026-11-28 -->
 <!-- revision: 1 -->
 # Modules
 
@@ -167,7 +167,8 @@ in doubt, split at the point where two different people would hold different opi
   burned cells against it with the same measures as `obs.perimeters` (acres, Sørensen, missed,
   overrun), so a README table reads either. The seen area is a floor on the burned area: cloud, smoke
   and the gaps between passes. First used for Fort McMurray 2016, where `built.footprints` takes its
-  buildings from OpenStreetMap (`source = "osm"`) because no county footprint service exists.
+  buildings from a warehouse product of OpenStreetMap's outlines (`data.buildings`) because no county
+  footprint service exists.
 - `score.regions` (`crates/modules/src/score.rs`, 2026-11-05): the world scored by region. Nine bands per country, each a World Bank indicator (`registry::worldbank::latest_by_country`,
   anonymous API, latest value per ISO3) ranked among the countries that report it to a 0 to 1 score; the
   total the mean of the bands present. Published as a `region.scored` table (countries with centroids and

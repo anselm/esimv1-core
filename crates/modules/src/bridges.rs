@@ -5,7 +5,6 @@
 //! no city. One of the four subject modules that replaced `hazard.components` on 2026-11-14.
 use crate::fragility::{curve, force_param, forced, table, tf, ts, Curve, Shaking};
 use crate::quake::{cell_of, root, window_grid};
-use esim_registry::wildfire::{cached_osm_bridges, osm_bridges};
 use esim_registry::Fetcher;
 use esim_kernel::manifest::{param_f64, param_str};
 use esim_kernel::{Ctx, Describe, Duration, Event, LatLonGrid, Module};
@@ -19,6 +18,7 @@ struct Bridge { name: String, lat: f64, lon: f64, cell: usize, class: String, st
 #[derive(Serialize, Deserialize)]
 pub struct Bridges {
     name: String,
+    #[serde(default)] data_roads: String, #[serde(default)] data_names: String, #[serde(default)] data_shore: String,
     lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64, res_arcsec: f64,
     folder: String, force: Vec<String>,
     default: Curve, classes: BTreeMap<String, Curve>,
@@ -30,6 +30,7 @@ impl Bridges {
     pub fn new(name: &str, p: &toml::Value) -> Result<Bridges, String> {
         let mut o = Bridges {
             name: name.to_string(),
+            data_roads: crate::data_of(p, "roads"), data_names: crate::data_of(p, "names"), data_shore: crate::data_of(p, "shore"),
             lat_s: crate::fragility::need_f64(p, "lat_s", name)?, lat_n: crate::fragility::need_f64(p, "lat_n", name)?, lon_w: crate::fragility::need_f64(p, "lon_w", name)?, lon_e: crate::fragility::need_f64(p, "lon_e", name)?, res_arcsec: param_f64(p, "res_arcsec", 1.0),
             folder: param_str(p, "folder", "").to_string(), force: force_param(p),
             default: Curve::default(), classes: BTreeMap::new(), bridges: Vec::new(), fired: false, scheduled: false, day: 0, grid: None,
@@ -45,7 +46,7 @@ impl Bridges {
         let br = table(&self.folder, "bridges.toml")?;
         self.bridges = br.get("bridge").and_then(|v| v.as_array()).cloned().unwrap_or_default().iter().map(|b| { let (lat, lon) = (tf(b, "lat"), tf(b, "lon")); Bridge { name: ts(b, "name"), lat, lon, cell: cell_of(&g, lat, lon), class: ts(b, "seismic_class"), state: 0, down: false, repair_day: -1 } }).collect();
         // the bridges' lines for a map, from OpenStreetMap; fetched once, carried by the describe from the cache
-        match Fetcher::default_for(&root()) { Ok(mut fe) => { if let Err(e) = osm_bridges(&mut fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e) { eprintln!("bridge lines: {e} (the map will draw each bridge as a point)"); } } Err(e) => eprintln!("bridge lines: {e}") }
+        match Fetcher::default_for(&root()) { Ok(mut fe) => { if let Err(e) = esim_registry::warehouse::bridges(&mut fe, &self.data_roads) { eprintln!("bridge lines: {e} (the map will draw each bridge as a point)"); } } Err(e) => eprintln!("bridge lines: {e}") }
         self.grid = Some(g);
         Ok(())
     }
@@ -55,7 +56,7 @@ impl Bridges {
         let br = table(folder, "bridges.toml").ok()?;
         let list: Vec<(String, f64, f64)> = br.get("bridge")?.as_array()?.iter().map(|b| (ts(b, "name"), tf(b, "lat"), tf(b, "lon"))).collect();
         let fe = Fetcher::default_for(&root()).ok()?;
-        let osm = cached_osm_bridges(&fe, param_f64(p, "lat_s", 0.0), param_f64(p, "lat_n", 0.0), param_f64(p, "lon_w", 0.0), param_f64(p, "lon_e", 0.0))?;
+        let osm = esim_registry::warehouse::cached_bridges(&fe, &crate::data_of(p, "roads"))?;
         let mut lines: Vec<Vec<serde_json::Value>> = vec![Vec::new(); list.len()];
         for w in osm.get("ways")?.as_array()? {
             let pts: Vec<(f64, f64)> = w["pts"].as_array().into_iter().flatten().filter_map(|q| Some((q[0].as_f64()?, q[1].as_f64()?))).collect();
@@ -87,7 +88,7 @@ impl Bridges {
             .view("counter", "bridges open", "bridges.open", &format!("of {n}, each according to its own damage state and repair time"))
             .view("chart", "bridges open", "bridges.open", "")
             .view("text", "what this module leaves out", "A bridge is one point with one curve for its class. The module does not represent spans, approaches, piers or movable parts separately, and a bridge is either open or closed, with no reduced capacity. Repair times are fixed by damage state and do not depend on how many other bridges need repair at once.", "");
-        if let Some(g) = Self::geometry(folder, p) { d = d.table("geometry", g).asset("osm-overpass", "the bridges' lines for the map, from OpenStreetMap"); }
+        if let Some(g) = Self::geometry(folder, p) { d = d.table("geometry", g).asset("esimv1-data", "the bridges' lines for the map, from OpenStreetMap"); }
         if let Some(fr) = fr { let mut t = serde_json::Map::new(); for k in ["bridge", "bridge_class"] { if let Some(v) = fr.get(k) { t.insert(k.to_string(), json!(v)); } } d = d.table("fragility", serde_json::Value::Object(t)); }
         d
     }

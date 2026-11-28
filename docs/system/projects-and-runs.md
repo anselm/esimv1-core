@@ -3,7 +3,7 @@
 <!-- author: Claude -->
 <!-- ordered-by: Anselm -->
 <!-- written: 2026-11-01 -->
-<!-- revised: 2026-11-26 -->
+<!-- revised: 2026-11-28 -->
 <!-- revision: 1 -->
 # Projects and runs
 
@@ -155,8 +155,9 @@ as an ensemble or a server.
 Fetched data is shared. A file is kept by what it is, not by which scenario asked, so fifty
 scenarios of one place fetch each file once. Two preparations started at the same moment are
 safe: one fetches a file while the other waits and then finds it. Requests have time limits, and
-requests to one server are spaced. Answers from OpenStreetMap are slow and unreliable to fetch,
-so once reduced they are kept in the repository under `data/osm/`.
+requests to one server are spaced. Roads, buildings, place names and shorelines are not fetched
+from OpenStreetMap by the engine: they are products of the data warehouse, which a manifest names
+in its `data` table ([Data](/docs/system/data), The data warehouse).
 
 ## A run is a folder
 

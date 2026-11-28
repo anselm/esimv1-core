@@ -3,7 +3,6 @@
 
 use crate::fetch::Fetcher;
 use crate::obs::{fetch_json_text, parse_iso_hour};
-use serde_json::json;
 
 /// Hourly waves at one point: significant height, the direction they come from, mean and peak period.
 #[derive(Clone, Debug, Default)]
@@ -51,41 +50,8 @@ pub fn waves_hourly(fetcher: &mut Fetcher, lat: f64, lon: f64, year_from: i32, y
 #[derive(Clone, Debug)]
 pub struct ShoreWay { pub id: i64, pub kind: String, pub name: String, pub pts: Vec<(f64, f64)> }
 
-fn enc(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() { match b { b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char), _ => out.push_str(&format!("%{b:02X}")) } }
-    out
-}
 
-/// The coastline and breakwaters of a window through Overpass, reduced to vertex lists and cached.
-pub fn osm_shore(fetcher: &mut Fetcher, lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64) -> Result<Vec<ShoreWay>, String> {
-    let q = format!("[out:json][timeout:180];(way[\"natural\"=\"coastline\"]({lat_s},{lon_w},{lat_n},{lon_e});way[\"man_made\"=\"breakwater\"]({lat_s},{lon_w},{lat_n},{lon_e}););out geom;");
-    let key = format!("osm-overpass/shore_{lat_s}_{lat_n}_{lon_w}_{lon_e}.json");
-    let reduce = |raw: &[u8]| -> Result<Vec<u8>, String> {
-        let v: serde_json::Value = serde_json::from_slice(raw).map_err(|e| format!("overpass json: {e}"))?;
-        if let Some(r) = v.get("remark") { if r.as_str().map(|s| s.contains("error")).unwrap_or(false) { return Err(format!("overpass: {r}")); } }
-        let mut out = Vec::new();
-        for e in v["elements"].as_array().cloned().unwrap_or_default() {
-            if e["type"] != "way" { continue; }
-            let pts: Vec<serde_json::Value> = e["geometry"].as_array().cloned().unwrap_or_default().iter().filter_map(|g| Some(json!([g["lat"].as_f64()?, g["lon"].as_f64()?]))).collect();
-            if pts.len() < 2 { continue; }
-            let tags = &e["tags"];
-            let kind = if tags["man_made"] == "breakwater" { "breakwater" } else { "coastline" };
-            out.push(json!({ "id": e["id"], "kind": kind, "name": tags["name"].as_str().unwrap_or(""), "pts": pts }));
-        }
-        serde_json::to_vec(&out).map_err(|e| e.to_string())
-    };
-    let mut last = String::new();
-    let mut path = None;
-    for host in ["https://overpass.kumi.systems/api/interpreter", "https://overpass-api.de/api/interpreter"] {
-        let url = format!("{host}?data={}", enc(&q));
-        match fetcher.fetch_reduced(&key, &url, &reduce) { Ok(p) => { path = Some(p); break; } Err(e) => { last = e; } }
-    }
-    let path = path.ok_or(last)?;
-    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("osm shore cache: {e}"))?;
-    Ok(v.as_array().cloned().unwrap_or_default().iter().map(|w| ShoreWay {
-        id: w["id"].as_i64().unwrap_or(0), kind: w["kind"].as_str().unwrap_or("").into(), name: w["name"].as_str().unwrap_or("").into(),
-        pts: w["pts"].as_array().cloned().unwrap_or_default().iter().filter_map(|p| Some((p.get(0)?.as_f64()?, p.get(1)?.as_f64()?))).collect(),
-    }).collect())
+/// The coastline and breakwaters of a shore product from the warehouse (`shore/osm/<place>/<date>`).
+pub fn osm_shore(fetcher: &mut Fetcher, product: &str) -> Result<Vec<ShoreWay>, String> {
+    Ok(crate::warehouse::shore(fetcher, product)?.into_iter().map(|(kind, name, id, pts)| ShoreWay { id, kind, name, pts }).collect())
 }

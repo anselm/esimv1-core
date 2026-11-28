@@ -495,27 +495,27 @@ impl Module for Cover {
 
 /// `roads.major`: the cells under a road wide enough to matter, from OpenStreetMap.
 #[derive(Serialize, Deserialize)]
-pub struct Roads { name: String, place: (f64, f64, f64, f64, f64), widths_m: String, #[serde(skip)] road: Vec<f32> }
+pub struct Roads { name: String, place: (f64, f64, f64, f64, f64), widths_m: String, #[serde(default)] roads: String, #[serde(default)] names: String, #[serde(skip)] road: Vec<f32> }
 
 impl Roads {
     pub fn new(name: &str, p: &toml::Value) -> Result<Roads, String> {
-        let mut r = Roads { name: name.into(), place: place_of("roads.major", name, p)?, widths_m: param_str(p, "widths_m", "motorway=30,trunk=20,primary=14,secondary=10,tertiary=8").into(), road: vec![] };
+        let mut r = Roads { name: name.into(), place: place_of("roads.major", name, p)?, widths_m: param_str(p, "widths_m", "motorway=30,trunk=20,primary=14,secondary=10,tertiary=8").into(), roads: crate::data_of(p, "roads"), names: crate::data_of(p, "names"), road: vec![] };
         r.load()?; Ok(r)
     }
     fn load(&mut self) -> Result<(), String> {
         let (lat_s, lat_n, lon_w, lon_e, res) = self.place; let grid = grid_of(lat_s, lat_n, lon_w, lon_e, res);
-        let mut fe = Fetcher::default_for(&root())?;
-        let cv = esim_registry::wildfire::context(&mut fe, lat_s, lat_n, lon_w, lon_e).ok().or_else(|| esim_registry::wildfire::cached_context(&fe, lat_s, lat_n, lon_w, lon_e));
+        if self.roads.is_empty() { eprintln!("roads: no roads product named in data; no cell is marked"); }
+        // a roads product the manifest names and no store can give stops the run: the fire would otherwise cross every road
+        let cv = if self.roads.is_empty() { None } else { let mut fe = Fetcher::default_for(&root())?; Some(esim_registry::warehouse::context(&mut fe, &self.roads, &self.names)?) };
         self.road = rasterise_roads(cv.as_ref(), &self.widths_m, &grid).into_iter().map(|b| if b { 1.0 } else { 0.0 }).collect();
         Ok(())
     }
     pub fn describe(name: &str, p: &toml::Value) -> Describe {
-        let d = place_params(Describe::new("roads.major", name, "The major roads of the window from OpenStreetMap, as the cells they cover: each road is given a width by its class and every cell under it is marked. A fire reads the marks as ground with no fuel; anything else may read them as roads."))
+        let d = place_params(Describe::new("roads.major", name, "The major roads of the window, as the cells they cover, from the roads product the manifest names in `data` (OpenStreetMap's ways, kept in the data warehouse): each road is given a width by its class and every cell under it is marked. A fire reads the marks as ground with no fuel; anything else may read them as roads."))
             .dt("once, at the start").param("widths_m", "motorway=30,trunk=20,primary=14,secondary=10,tertiary=8", "", "the width given to each class of road, in metres; classes not named are not marked")
-            .own("roads.cells", "1").asset("osm-overpass", "the roads of the window")
+            .param("data", "", "", "a table naming warehouse products: `roads` (a roads product, `roads/osm/<place>/<date>`) and optionally `names` (place names and city limits for the map)").own("roads.cells", "1").asset("esimv1-data", "the roads and place names of the window")
             .note("Widths are by class, not measured. Minor roads are left out.");
-        let (lat_s, lat_n, lon_w, lon_e) = (param_f64(p, "lat_s", 0.0), param_f64(p, "lat_n", 0.0), param_f64(p, "lon_w", 0.0), param_f64(p, "lon_e", 0.0));
-        match Fetcher::default_for(&root()).ok().and_then(|f| esim_registry::wildfire::cached_context(&f, lat_s, lat_n, lon_w, lon_e)) { Some(c) => d.table("context", c), None => d }
+        match crate::cached_map_context(p) { Some(c) => d.table("context", c), None => d }
     }
 }
 impl Module for Roads {
@@ -596,25 +596,20 @@ pub fn fate_code(damage: &str) -> u8 { if damage.starts_with("Destroyed") { 3 } 
 #[derive(Serialize, Deserialize)]
 pub struct Footprints {
     name: String, place: (f64, f64, f64, f64, f64),
-    source: String, service: String, wh: String, key: String,
+    #[serde(default)] data: String,
     #[serde(skip)] bs: Vec<esim_registry::wildfire::Building>, #[serde(skip)] frac: Vec<f32>, #[serde(skip)] height: Vec<f32>,
 }
 
 impl Footprints {
     pub fn new(name: &str, p: &toml::Value) -> Result<Footprints, String> {
-        let mut f = Footprints { name: name.into(), place: place_of("built.footprints", name, p)?, source: param_str(p, "source", "osm").into(),
-            service: param_str(p, "service", "").into(), wh: param_str(p, "where", "").into(), key: param_str(p, "key", "").into(), bs: vec![], frac: vec![], height: vec![] };
+        let mut f = Footprints { name: name.into(), place: place_of("built.footprints", name, p)?, data: crate::data_of(p, "buildings"), bs: vec![], frac: vec![], height: vec![] };
         f.load()?; Ok(f)
     }
     fn load(&mut self) -> Result<(), String> {
         let (lat_s, lat_n, lon_w, lon_e, res) = self.place; let grid = grid_of(lat_s, lat_n, lon_w, lon_e, res);
         let mut fe = Fetcher::default_for(&root())?;
-        let fetched = match self.source.as_str() {
-            "osm" => esim_registry::wildfire::osm_buildings(&mut fe, lat_s, lat_n, lon_w, lon_e),
-            "none" => Err("no building source asked for".to_string()),
-            _ => esim_registry::wildfire::building_footprints(&mut fe, &self.service, &self.key, &self.wh),
-        };
-        self.bs = match fetched { Ok(bs) => bs, Err(e) => { eprintln!("buildings: {e}; no footprints"); vec![] } };
+        let fetched = if self.data.is_empty() { Err("no buildings product named in data".to_string()) } else { esim_registry::warehouse::buildings(&mut fe, &self.data) };
+        self.bs = match fetched { Ok(bs) => bs, Err(e) if self.data.is_empty() => { eprintln!("buildings: {e}; no footprints"); vec![] } Err(e) => return Err(format!("buildings: {e}")) };
         let (f, h) = rasterise_buildings(&self.bs, &grid);
         eprintln!("buildings: {} footprints, {} cells touched", self.bs.len(), f.iter().filter(|&&x| x > 0.0).count());
         self.frac = f; self.height = h;
@@ -623,11 +618,11 @@ impl Footprints {
     pub fn describe(name: &str, _p: &toml::Value) -> Describe {
         place_params(Describe::new("built.footprints", name, "The buildings of the window. Each footprint is one row of a shared table with its outline, its stated height and, where inspectors recorded it after an event, what happened to it. The same footprints are also laid on the cells as two maps: the share of each cell under a building and the mean height there. Any module may read the table: a fire to burn the buildings, people to live in them, a count to score against."))
             .dt("once, at the start")
-            .param("source", "osm", "", "osm: OpenStreetMap buildings through Overpass, heights from the height tag or building:levels times 3.2 m, else two storeys, a guess; service: a feature service of footprints (LA County's for the 2025 fires); none").param("service", "", "", "the feature service, when source is service").param("where", "", "", "its filter").param("key", "", "", "the cache key for its pages")
+            .param("data", "", "", "a table naming warehouse products; this module reads `buildings`, a buildings product such as `buildings/massing/<place>/<date>`. With none named there are no footprints")
             .own("built.frac", "1").own("built.height", "ft (as stated)").own("built.footprints", "table")
             .frame("building_height", "ft (as stated)")
-            .asset("lacounty-lariac-buildings-2025-fires", "footprints, heights and inspected damage, when source is service").asset("osm-overpass", "footprints, when source is osm")
-            .note("The table built.footprints has one row per building: columns height and fate (0 unknown, 1 no damage, 2 damaged, 3 destroyed) and the outline as a shape.").note("OpenStreetMap footprints are incomplete and carry few heights. A building is an outline and a height; what it is made of is not known here.")
+            .asset("esimv1-data", "footprints with a height each and, where the source kept it, the inspected damage")
+            .note("The table built.footprints has one row per building: columns height and fate (0 unknown, 1 no damage, 2 damaged, 3 destroyed) and the outline as a shape.").note("A height is in feet whatever the product's source. A massing product gives every outline a height and says where each came from (measured, tagged, estimated from pictures, or guessed from neighbours); this module does not carry that mark, so a guessed height reads like a measured one here. What a building is made of is not known.")
     }
 }
 impl Module for Footprints {

@@ -18,8 +18,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **licence** Zenodo record 5705391 (AR6 WG1 Annex III Extended Data, Smith et al.) states CC BY 4.0, read from the record API on 2026-11-01; the GitHub repository's own licence file to be read and stored before promotion
 - **units** W/m2, effective radiative forcing relative to 1750
 - **verified** 2026-11-01 from canada1: 270 rows 1750 to 2019; aerosol 2019 = see the run's forcing.ar6_aerosol_w_m2 series
-- **url** `https://raw.githubusercontent.com/chrisroadmap/ar6/main/data_output/AR6_ERF_1750-2019.csv`
-- **notes** An assessment, not an observation: these are the IPCC's best-estimate forcings. Used for the components the model does not compute (everything but CO2, CH4, N2O), with the stated assumption after 2019.
+- **url** `https://data.earthlight.cloud/tables/ipcc-ar6-erf/2026-11-02/AR6_ERF_1750-2019.csv`
+- **notes** An assessment, not an observation: these are the IPCC's best-estimate forcings. Used for the components the model does not compute (everything but CO2, CH4, N2O), with the stated assumption after 2019. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://raw.githubusercontent.com/chrisroadmap/ar6/main/data_output/AR6_ERF_1750-2019.csv on the day the hash list records.
 
 ## document
 
@@ -92,8 +92,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **licence** Our World in Data states its data is Creative Commons BY 4.0; the underlying Global Carbon Budget asks for citation of the budget paper; both texts to be fetched and stored before promotion
 - **units** co2 and land_use_change_co2 columns in million tonnes CO2 per year; the reader converts to GtC
 - **verified** 2026-11-01 from canada1: anonymous GET, 14.4 MB; World rows 1850 to 2024; World 2024 co2 = 38598.578 Mt, co2_including_luc = 43184.086 Mt
-- **url** `https://raw.githubusercontent.com/owid/co2-data/master/owid-co2-data.csv`
-- **notes** The file is rebuilt by OWID when the budget is updated; the lock pins the bytes a run used.
+- **url** `https://data.earthlight.cloud/tables/owid-co2-data/2026-11-01/owid-co2-data.csv`
+- **notes** The file is rebuilt by OWID when the budget is updated; the lock pins the bytes a run used. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://raw.githubusercontent.com/owid/co2-data/master/owid-co2-data.csv on the day the hash list records.
 
 ### NOAA GML Mauna Loa annual mean CO2
 
@@ -102,8 +102,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **licence** The file header: made freely available to the public and the scientific community; include relevant citation text in publications
 - **units** ppm (dry air mole fraction), with an uncertainty column
 - **verified** 2026-11-01 from canada1: 1959 to 2025; 2024 mean 424.61 ppm
-- **url** `https://gml.noaa.gov/webdata/ccgg/trends/co2/co2_annmean_mlo.csv`
-- **notes** Annual means; the monthly file co2_mm_mlo.csv is beside it if a module ever needs the seasonal cycle.
+- **url** `https://data.earthlight.cloud/tables/noaa-gml-co2-mlo-annual/2026-11-01/co2_annmean_mlo.csv`
+- **notes** Annual means; the monthly file co2_mm_mlo.csv is beside it if a module ever needs the seasonal cycle. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://gml.noaa.gov/webdata/ccgg/trends/co2/co2_annmean_mlo.csv on the day the hash list records.
 
 ### Law Dome ice core 2000-year CO2, CH4 and N2O (spline fits)
 
@@ -112,8 +112,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **licence** US federal public domain distribution; the file asks that the original reference be cited
 - **units** ppm CO2 by year AD, 20-year smoothing spline
 - **verified** 2026-11-01 from canada1: CO2 spline 1 AD to 2004; 1850 = 286.8 ppm, 2004 = 374.6 ppm
-- **url** `https://www.ncei.noaa.gov/pub/data/paleo/icecore/antarctica/law/law2006.txt`
-- **notes** Used for the years before Mauna Loa; the spline smooths over about 20 years.
+- **url** `https://data.earthlight.cloud/tables/law-dome-2006/2026-11-27/law2006.txt`
+- **notes** Used for the years before Mauna Loa; the spline smooths over about 20 years. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://www.ncei.noaa.gov/pub/data/paleo/icecore/antarctica/law/law2006.txt on the day the hash list records.
 
 ### HadCRUT5 analysis, global mean surface temperature anomaly, annual
 
@@ -122,8 +122,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **licence** Met Office HadOBS data are published under the Open Government Licence v3 as far as the agent recalls; to be confirmed from the HadOBS site and stored before promotion
 - **units** deg C relative to 1961-1990, with 2.5 and 97.5 percent limits
 - **verified** 2026-11-01 from canada1: 1850 to 2025; 2024 = 1.18 deg C vs 1961-1990
-- **url** `https://www.metoffice.gov.uk/hadobs/hadcrut5/data/HadCRUT.5.0.2.0/analysis/diagnostics/HadCRUT.5.0.2.0.analysis.summary_series.global.annual.csv`
-- **notes** Version 5.0.2.0 in the path; a new version changes the URL.
+- **url** `https://data.earthlight.cloud/tables/hadcrut5-global-annual/2026-11-01/global.annual.csv`
+- **notes** Version 5.0.2.0 in the path; a new version changes the URL. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://www.metoffice.gov.uk/hadobs/hadcrut5/data/HadCRUT.5.0.2.0/analysis/diagnostics/HadCRUT.5.0.2.0.analysis.summary_series.global.annual.csv on the day the hash list records.
 
 ### NASA GISTEMP v4 land-ocean temperature index, global, monthly and annual
 
@@ -132,8 +132,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **licence** US federal public domain
 - **units** deg C relative to 1951-1980; J-D is the calendar-year mean
 - **verified** 2026-11-01 from canada1: 1880 to 2026 (2026 incomplete); 2024 J-D = 1.28 deg C vs 1951-1980
-- **url** `https://data.giss.nasa.gov/gistemp/tabledata_v4/GLB.Ts+dSST.csv`
-- **notes** Updated monthly; the lock pins the bytes.
+- **url** `https://data.earthlight.cloud/tables/gistemp-global/2026-11-01/GLB.Ts+dSST.csv`
+- **notes** Updated monthly; the lock pins the bytes. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://data.giss.nasa.gov/gistemp/tabledata_v4/GLB.Ts+dSST.csv on the day the hash list records.
 
 ### NOAA GML globally averaged marine surface annual mean methane
 
@@ -142,8 +142,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **licence** As for the Mauna Loa file: freely available, cite in publications
 - **units** ppb
 - **verified** 2026-11-01 from canada1: 1984 to 2025; 2025 = 1936.03 ppb
-- **url** `https://gml.noaa.gov/webdata/ccgg/trends/ch4/ch4_annmean_gl.csv`
-- **notes** Before 1984 the Law Dome spline (law-dome-2006) carries methane.
+- **url** `https://data.earthlight.cloud/tables/noaa-gml-ch4-global-annual/2026-11-02/ch4_annmean_gl.csv`
+- **notes** Before 1984 the Law Dome spline (law-dome-2006) carries methane. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://gml.noaa.gov/webdata/ccgg/trends/ch4/ch4_annmean_gl.csv on the day the hash list records.
 
 ### NOAA GML globally averaged marine surface annual mean nitrous oxide
 
@@ -152,8 +152,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **licence** As for the Mauna Loa file: freely available, cite in publications
 - **units** ppb
 - **verified** 2026-11-01 from canada1: 2001 to 2025; 2025 = 338.86 ppb
-- **url** `https://gml.noaa.gov/webdata/ccgg/trends/n2o/n2o_annmean_gl.csv`
-- **notes** Before 2001 the Law Dome spline (law-dome-2006) carries N2O.
+- **url** `https://data.earthlight.cloud/tables/noaa-gml-n2o-global-annual/2026-11-02/n2o_annmean_gl.csv`
+- **notes** Before 2001 the Law Dome spline (law-dome-2006) carries N2O. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://gml.noaa.gov/webdata/ccgg/trends/n2o/n2o_annmean_gl.csv on the day the hash list records.
 
 ### UN World Population Prospects 2024, total population by sex, all variants
 
@@ -162,8 +162,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **licence** UN WPP data are published under CC BY 3.0 IGO as far as the agent recalls; to be confirmed and stored before promotion
 - **units** PopTotal in thousands; the reader converts to persons
 - **verified** 2026-11-01 from canada1: 17.0 MB; World Medium 2024 = 8,161,973 thousand, 2050 = 9,664,379, 2100 = 10,180,161
-- **url** `https://population.un.org/wpp/assets/Excel%20Files/1_Indicator%20(Standard)/CSV_FILES/WPP2024_TotalPopulationBySex.csv.gz`
-- **notes** The Medium variant after 2023 is the UN's projection, not an observation; a run that uses it says so. The reader keeps Estimates and Medium only.
+- **url** `https://data.earthlight.cloud/tables/un-wpp-2024-total-population/2026-11-02/WPP2024_TotalPopulationBySex.csv.gz`
+- **notes** The Medium variant after 2023 is the UN's projection, not an observation; a run that uses it says so. The reader keeps Estimates and Medium only. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://population.un.org/wpp/assets/Excel%20Files/1_Indicator%20(Standard)/CSV_FILES/WPP2024_TotalPopulationBySex.csv.gz on the day the hash list records.
 
 ### CRU TS 4.07 country mean annual temperature 1901 to 2022, via the World Bank Climate Change Knowledge Portal API
 
@@ -172,8 +172,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **licence** CRU TS is Open Database Licence as far as the agent recalls; the CCKP terms to be fetched and stored before promotion
 - **units** deg C, annual mean, area-weighted over the country
 - **verified** 2026-11-01 from canada1: 473 KB, 230 country codes
-- **url** `https://cckpapi.worldbank.org/cckp/v1/cru-x0.5_timeseries_tas_timeseries_annual_1901-2022_mean_historical_cru_ts4.07_mean/all_countries?_format=json`
-- **notes** Country means from a half-degree grid; small islands are poorly represented. The portal's URL scheme encodes the collection; a new CRU version changes it.
+- **url** `https://data.earthlight.cloud/tables/cru-ts407-country-tas-annual/2026-11-02/cru_tas_annual_all_countries.json`
+- **notes** Country means from a half-degree grid; small islands are poorly represented. The portal's URL scheme encodes the collection; a new CRU version changes it. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://cckpapi.worldbank.org/cckp/v1/cru-x0.5_timeseries_tas_timeseries_annual_1901-2022_mean_historical_cru_ts4.07_mean/all_countries?_format=json on the day the hash list records.
 
 ### CRU TS 4.07 country mean monthly temperature 1901 to 2022, via the World Bank CCKP API
 
@@ -182,8 +182,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **licence** As the annual series
 - **units** deg C, monthly mean
 - **verified** 2026-11-01 from canada1: one JSON for all countries
-- **url** `https://cckpapi.worldbank.org/cckp/v1/cru-x0.5_timeseries_tas_timeseries_monthly_1901-2022_mean_historical_cru_ts4.07_mean/all_countries?_format=json`
-- **notes** Used for the hottest-month climatology per country.
+- **url** `https://data.earthlight.cloud/tables/cru-ts407-country-tas-monthly/2026-11-02/cru_tas_monthly_all_countries.json`
+- **notes** Used for the hottest-month climatology per country. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://cckpapi.worldbank.org/cckp/v1/cru-x0.5_timeseries_tas_timeseries_monthly_1901-2022_mean_historical_cru_ts4.07_mean/all_countries?_format=json on the day the hash list records.
 
 ### NOAA Global Surface Summary of the Day, by station and year
 
@@ -349,8 +349,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **publisher** NOAA NCEI
 - **licence** US federal public domain
 - **verified** 2026-11-01 from canada1: 2.9 MB
-- **url** `https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv`
-- **notes** Used to find the reporting station nearest each capital; the GSOD station id is USAF followed by WBAN.
+- **url** `https://data.earthlight.cloud/tables/noaa-isd-history/2026-11-02/isd-history.csv`
+- **notes** Used to find the reporting station nearest each capital; the GSOD station id is USAF followed by WBAN. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv on the day the hash list records.
 
 ## table
 
@@ -380,8 +380,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **publisher** Natural Earth (naturalearthdata.com), from the project's GitHub mirror nvkelso/natural-earth-vector
 - **licence** Natural Earth is public domain
 - **verified** 2026-11-01 from canada1: 839 KB, 177 features
-- **url** `https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson`
-- **notes** Coarse outlines, fine for a one-degree raster. The 10 m zip at naciscdn.org (4.9 MB) is there when a finer raster is needed.
+- **url** `https://data.earthlight.cloud/outlines/natural-earth-110m-countries/2026-11-02/ne_110m_admin_0_countries.geojson`
+- **notes** Coarse outlines, fine for a one-degree raster. The 10 m zip at naciscdn.org (4.9 MB) is there when a finer raster is needed. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson on the day the hash list records.
 
 ### Natural Earth 1:110m populated places (capitals), GeoJSON
 
@@ -389,8 +389,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **publisher** Natural Earth, from the project's GitHub mirror
 - **licence** Natural Earth is public domain
 - **verified** 2026-11-01 from canada1: 243 places, 215 capitals; nine 110m countries have no capital point (Antarctica, Greenland, Puerto Rico, South Sudan among them)
-- **url** `https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_populated_places.geojson`
-- **notes** One point per country for the wet-bulb layer; the capital stands for the country, which the layer says.
+- **url** `https://data.earthlight.cloud/names/natural-earth-110m-populated-places/2026-11-02/ne_110m_populated_places.geojson`
+- **notes** One point per country for the wet-bulb layer; the capital stands for the country, which the layer says. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_populated_places.geojson on the day the hash list records.
 
 ### Natural Earth 1:50m admin-0 countries (GeoJSON)
 
@@ -399,8 +399,8 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **licence** Natural Earth is public domain
 - **units** degrees
 - **verified** 2026-11-02 from canada1: HEAD 3,083,490 bytes
-- **url** `https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson`
-- **notes** Used in place of the 1:110m file when the grid is finer than 2 degrees; at 1:110m small island states vanish at half a degree.
+- **url** `https://data.earthlight.cloud/outlines/natural-earth-50m-countries/2026-11-03/ne_50m_admin_0_countries.geojson`
+- **notes** Used in place of the 1:110m file when the grid is finer than 2 degrees; at 1:110m small island states vanish at half a degree. Read from the data warehouse since 2026-11-28, as the bytes fetched from the publisher at https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson on the day the hash list records.
 
 ### NIFC WFIGS interagency fire perimeters (the perimeter of record per incident)
 
@@ -420,15 +420,6 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **url** `https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/Operational_Data_Archive_{year}/FeatureServer/6/query?where={where}&outFields=*&outSR=4326&f=geojson`
 - **notes** DateCurrent is the time to use; PolygonDateTime is frozen on the infrared rows.
 
-### OpenStreetMap through the Overpass API: roads, place names and city limits inside a window; since 2026-11-04 also every building (way[building]) with its height tag or storeys, for fires without a county footprint service
-
-- **id** `osm-overpass`
-- **publisher** OpenStreetMap contributors
-- **licence** ODbL 1.0; attribution 'OpenStreetMap contributors' on any map that shows it
-- **verified** 2026-11-03 from canada1: see the registry's wildfire::context; the Palisades window answered
-- **url** `https://overpass-api.de/api/interpreter?data={query}`
-- **notes** A public instance with usage limits; one request per window, cached. Context only: nothing in a run's physics reads it.
-
 ### CAL FIRE Damage Inspection (DINS) points for the 2025 Palisades fire, public view
 
 - **id** `cal-fire-dins-2025-palisades`
@@ -438,14 +429,14 @@ Every record this simulator reads, from `data/catalog.toml`, with the publisher,
 - **url** `https://services1.arcgis.com/jUJYIo9tSA7EHvfZ/arcgis/rest/services/DINS_2025_Palisades_Public_View/FeatureServer/0/query?where=1%3D1&outFields=DAMAGE,STRUCTURETYPE&outSR=4326&f=geojson&resultOffset={offset}&resultRecordCount=2000`
 - **notes** The destroyed count equals CAL FIRE's incident figure of 6,845 structures.
 
-### LA County building footprints for the 2025 fires, with heights and CAL FIRE's damage inspection joined
+### The data warehouse beside the engine: buildings with heights, roads, place names and shorelines for named places
 
-- **id** `lacounty-lariac-buildings-2025-fires`
-- **publisher** Los Angeles County Assessor (LARIAC footprints), damage from CAL FIRE DINS
-- **licence** The sibling service states copyright LARIAC, County of Los Angeles, Pictometry, EagleView, CalFIRE; no licence text on this one. Attribute them; do not redistribute the footprints as a dataset.
-- **verified** 2026-11-03 from canada1: Incident_Name LIKE '%Palisades%' answered 13,292 polygons; maximum damage Destroyed 6,352, No Damage 3,780, blank 2,250, Affected 687, Minor 159, Major 64; heights 0.75 to 96, mean 21
-- **url** `https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/2025_WildFire_LARIAC_BUILDINGS_100M_Plus_DINS_MaxMin_DAMAGE_NEW/FeatureServer/0/query?where={where}&outFields=HEIGHT,DINS_MaximumDamage&outSR=4326&f=geojson&resultOffset={offset}&resultRecordCount=2000`
-- **notes** The buildings module (built.footprints) keeps every footprint as a row of a shared table and rasterises them to a cell fraction and a mean height; the fire model reads both, and the 3D view extrudes them.
+- **id** `esimv1-data`
+- **publisher** esimv1-data (github.com/anselm/esimv1-data), which makes the products from OpenStreetMap, Microsoft's building footprints and city or county layers
+- **licence** Stated on each product: ODbL 1.0 for OpenStreetMap's, the city's or county's terms for theirs, CDLA Permissive 2.0 for Microsoft's height estimates
+- **verified** 2026-11-28 from canada1: the registry's warehouse reader fetched products for all six places and checked each against its item's checksum
+- **url** `https://data.earthlight.cloud/{plane}/{source}/{place}/{date}/{file}`
+- **notes** A manifest names products by address in its `data` table (`buildings/massing/nicasio/2026-11-27`); a product never changes once made. The engine asks OpenStreetMap or a county service for nothing itself since 2026-11-28. ESIM_DATA_STORES lists the stores to read; a product listed without its bytes (the LA County footprints) is read from the builder's own store or rebuilt with esim-data.
 
 ### DOGAMI Open-File Report O-18-02: building footprints, neighbourhood units, jurisdictions, emergency routes, transmission structures and the Hazus loss tables
 

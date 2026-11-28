@@ -3,7 +3,7 @@
 <!-- author: Claude -->
 <!-- ordered-by: Anselm -->
 <!-- written: 2026-11-01 -->
-<!-- revised: 2026-11-04 -->
+<!-- revised: 2026-11-28 -->
 <!-- revision: 1 -->
 # Data
 
@@ -29,8 +29,47 @@ stored before any public use; [Sources](/docs/system/sources) is that list as a 
 
 For the fire (since 2026-11-03) the catalog adds ESA WorldCover, NOAA's HRRR analyses read by
 byte range, Open-Meteo's ERA5 wind with gusts, NIFC's perimeters, CAL FIRE's damage
-inspections, Los Angeles County's building footprints, OpenStreetMap through Overpass, NOAA's
-emergency response imagery and UL Research Institutes' timestamped incident dataset.
+inspections, NOAA's emergency response imagery and UL Research Institutes' timestamped
+incident dataset.
+
+## The data warehouse
+
+Since 2026-11-28 the engine asks OpenStreetMap, or a county's map service, for nothing itself.
+The buildings, roads, place names and shoreline of a place come from a separate store of
+small data products, the data warehouse, at <https://data.earthlight.cloud>. It is made by a
+separate tool, [esimv1-data](https://github.com/anselm/esimv1-data), which does not depend on
+the engine. Several small global tables (emissions, the temperature records, country outlines,
+population) are read from it too, as the same bytes the runs used before.
+
+A manifest names the products it reads by their address in the store, once, in a `data` table
+that it hands to each module beside `place`:
+
+```js
+const data = {
+  roads: "roads/osm/nicasio/2026-11-27",
+  names: "names/osm/nicasio/2026-11-28",
+  buildings: "buildings/massing/nicasio/2026-11-27",
+};
+const roads = { kind: "roads.major", params: { place, data } };
+```
+
+A product is never changed once made: a newer map is a new product under a newer date. So the
+address in the manifest fixes the bytes a run reads, and the product's own description states
+a checksum that the engine checks the bytes against. A roads or buildings product that is
+named and cannot be read stops the run. A names product only labels the map, so its absence
+costs the labels and nothing else.
+
+`ESIM_DATA_STORES` lists the stores to read, separated by commas, each a folder or a web
+address. Left unset, the engine reads the workspace's own `dataservice/store` when it exists
+and then the public store. One product in use is listed in the public store without its bytes:
+Los Angeles County's building footprints for the Palisades fire, because the county's terms
+were not read when it was made. Anyone can rebuild it with the data tool from the request its
+listing carries.
+
+What the change did to the runs is in the hub's devlog entry of 2026-11-28. In short: runs
+that take only their map's labels from these products, and the shoreline model, are identical.
+The three cell-fire scenarios read roads and buildings as ground, the products differ from the
+engine's old copies of them, and those fires moved.
 
 ## The record of an event
 

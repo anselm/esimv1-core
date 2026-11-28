@@ -188,15 +188,8 @@ impl Fetcher {
         self.reduced(key, path, url, None, reduce)
     }
 
-    /// Where a reduced answer lives. Most are in the cache, which is not in git and can be
-    /// fetched again. An OpenStreetMap answer through Overpass is small once reduced and slow and
-    /// unreliable to fetch (ten minutes for one city on 2026-11-14, one mirror hanging, the other
-    /// answering 502), so it is kept in `data/osm/`, which is committed: a box that has pulled the
-    /// repository never asks Overpass for a window that was fetched once.
-    pub fn kept_path(&self, name: &str) -> PathBuf {
-        // beside the hash list, in the repository, wherever the cache has been pointed
-        if name.starts_with("osm-overpass_") { self.lock_path.parent().unwrap_or(&self.cache_dir).join("osm").join(name) } else { self.cache_dir.join(name) }
-    }
+    /// Where a reduced answer lives: in the cache, which is not in git and can be made again.
+    pub fn kept_path(&self, name: &str) -> PathBuf { self.cache_dir.join(name) }
 
     /// Fetch one byte range of `url` (a GRIB record by its index), hash the raw bytes into the
     /// lock under `key`, keep only `reduce(raw)` in the cache. The lock's url carries the range.

@@ -17,6 +17,7 @@ pub mod grib;
 pub mod worldbank;
 pub mod coast;
 pub mod paths;
+pub mod warehouse;
 
 pub const EARTH_RADIUS_M: f64 = 6_371_008.8;
 

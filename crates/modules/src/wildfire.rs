@@ -19,7 +19,7 @@
 
 use esim_kernel::manifest::{param_duration, param_f64, param_str};
 use esim_kernel::{Ctx, Duration, Event, LatLonGrid, Module, Time};
-use esim_registry::wildfire::{cached_context, context, daily_perimeters, dins_points, landcover_window, rasterize, wfigs_perimeters, wind_hourly, Perimeter, Structure, WindSeries};
+use esim_registry::wildfire::{daily_perimeters, dins_points, landcover_window, rasterize, wfigs_perimeters, wind_hourly, Perimeter, Structure, WindSeries};
 use esim_registry::{dem_window, Catalog, Fetcher};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -158,6 +158,7 @@ pub(crate) fn length_to_breadth(u_m_s: f64) -> f64 {
 #[derive(Serialize, Deserialize)]
 pub struct Rothermel {
     name: String,
+    #[serde(default)] data_roads: String, #[serde(default)] data_names: String, #[serde(default)] data_shore: String,
     lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64, res_arcsec: f64,
     dt: Duration,
     frame_every: Duration,
@@ -207,6 +208,7 @@ impl Rothermel {
     pub fn new(name: &str, p: &toml::Value) -> Result<Rothermel, String> {
         let mut f = Rothermel {
             name: name.to_string(),
+            data_roads: crate::data_of(p, "roads"), data_names: crate::data_of(p, "names"), data_shore: crate::data_of(p, "shore"),
             lat_s: param_f64(p, "lat_s", 34.0), lat_n: param_f64(p, "lat_n", 34.16), lon_w: param_f64(p, "lon_w", -118.72), lon_e: param_f64(p, "lon_e", -118.46),
             res_arcsec: param_f64(p, "res_arcsec", 1.0),
             dt: param_duration(p, "dt", "1h")?,
@@ -259,9 +261,9 @@ impl Rothermel {
         if !world {
             let wind_lat = (self.lat_s + self.lat_n) / 2.0; let wind_lon = (self.lon_w + self.lon_e) / 2.0;
             self.wind = Some(wind_hourly(&mut fe, wind_lat, wind_lon, &self.wind_start, &self.wind_end)?);
-            // roads, place names and city limits for the map; fetched once, carried by the describe from the cache
-            if let Err(e) = context(&mut fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e) { eprintln!("context: {e} (the map will have no roads or names)"); }
         }
+        // roads, place names and city limits for the map: read from the warehouse once, carried by the describe from the cache
+        crate::map_context(&self.data_roads, &self.data_names);
         self.area_m2 = (0..grid.ny).flat_map(|r| std::iter::repeat_n(grid.row_area(r), grid.nx)).collect();
         self.metres = (0..grid.ny).map(|r| { let (mx, my) = grid.metres_per_degree(r); (mx * grid.dlon, my * grid.dlat) }).collect();
         // every primitive lattice direction within reach: (1,0), (1,1), (1,2), (2,1), (1,3), ... in all quadrants
@@ -507,8 +509,7 @@ impl Rothermel {
     pub fn describe(name: &str, p: &toml::Value) -> esim_kernel::describe::Describe {
         let root = std::env::var("ESIM_ROOT").ok().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
         let fuels = load_fuels(&root).map(|(f, _)| serde_json::to_value(f).unwrap_or(serde_json::Value::Array(vec![]))).unwrap_or(serde_json::Value::Array(vec![]));
-        let (lat_s, lat_n, lon_w, lon_e) = (param_f64(p, "lat_s", 34.0), param_f64(p, "lat_n", 34.16), param_f64(p, "lon_w", -118.72), param_f64(p, "lon_e", -118.46));
-        let ctx_table = Fetcher::default_for(&root).ok().and_then(|f| cached_context(&f, lat_s, lat_n, lon_w, lon_e));
+        let ctx_table = crate::cached_map_context(p);
         let mut d = esim_kernel::describe::Describe::new("fire.rothermel", name, "A wildfire on real terrain: Rothermel's surface spread model on a one-arc-second DEM window, a fuel model per cell from WorldCover land cover, dead fuel moisture from the hour's humidity and temperature, wind speed and direction from the ERA5 archive at the window's centre; fire moves cell to cell down an ellipse headed along the wind-plus-slope vector. No suppression, no spotting, no crown fire; built-up land burns at a guessed rate the manifest can set to zero.")
             .priority(6).dt(param_str(p, "dt", "1h"))
             .param("lat_s", 34.0, "deg", "").param("lat_n", 34.16, "deg", "").param("lon_w", -118.72, "deg", "").param("lon_e", -118.46, "deg", "")
@@ -538,7 +539,7 @@ impl Rothermel {
             .view("map", "Arrival time", "fire_arrival_h", "hours since ignition, by cell")
             .view("chart", "Burned area", "fire.burned_acres", "")
             .view("chart", "Wind at the window's centre", "fire.wind_m_s", "ERA5 reanalysis, 25 km")
-            .asset("osm-overpass", "roads, place names and city limits for the map, read from the cache only")
+            .asset("esimv1-data", "roads, place names and city limits for the map, from the products named in `data`")
             .note("Rothermel 1972 as Andrews 2018 sets it out; moisture by Simard 1968; wind adjustment by Albini and Baughman 1979; ellipse by Anderson 1983. All recalled; nothing tuned. The reanalysis wind under-reads Santa Ana gusts; the gust variant is the honest upper bound the data allows.");
         if let Some(c) = ctx_table { d = d.table("context", c); }
         d = d.param("inputs", "own", "", "own: the module loads terrain, land cover and wind itself; world: it fetches nothing and reads them from the modules that hold them (ground.terrain, ground.cover, weather.surface, fuel.moisture), which must stand before it in the manifest");
@@ -547,7 +548,7 @@ impl Rothermel {
                 .read("air.wind_m_s", "m/s", true, "this hour's wind on each cell, from the weather module").read("air.wind_toward_rad", "rad", true, "").read("air.t2m_c", "degC", false, "for the report only").read("air.rh_pct", "%", false, "for the report only")
                 .read("fuel.dead_moisture", "1", true, "how dry the dead fuel is, from the fuel moisture module; its mean over the window is used")
                 .own("fire.arrival_s", "s");
-            d.assets.retain(|a| !["copernicus-dem-glo30", "esa-worldcover-2021", "open-meteo-era5-wind", "osm-overpass"].contains(&a.key.as_str()));
+            d.assets.retain(|a| !["copernicus-dem-glo30", "esa-worldcover-2021", "open-meteo-era5-wind"].contains(&a.key.as_str()));
             d.reports.retain(|r| r.name != "fire.gust_m_s");
         }
         d

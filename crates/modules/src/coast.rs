@@ -41,6 +41,7 @@ struct Structure { name: String, base: (f64, f64), tip: (f64, f64) }
 #[derive(Serialize, Deserialize)]
 pub struct OneLine {
     name: String,
+    #[serde(default)] data_roads: String, #[serde(default)] data_names: String, #[serde(default)] data_shore: String,
     lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64, res_arcsec: f64, frame_res_arcsec: f64, frame_margin_m: f64,
     root_lat: f64, root_lon: f64, length_m: f64, dx_m: f64,
     breakwater: String, tip_lat: f64, tip_lon: f64,
@@ -85,6 +86,7 @@ impl OneLine {
     pub fn new(name: &str, p: &toml::Value) -> Result<OneLine, String> {
         let mut o = OneLine {
             name: name.to_string(),
+            data_roads: crate::data_of(p, "roads"), data_names: crate::data_of(p, "names"), data_shore: crate::data_of(p, "shore"),
             lat_s: param_f64(p, "lat_s", 37.42), lat_n: param_f64(p, "lat_n", 37.52), lon_w: param_f64(p, "lon_w", -122.52), lon_e: param_f64(p, "lon_e", -122.42),
             res_arcsec: param_f64(p, "res_arcsec", 1.0), frame_res_arcsec: param_f64(p, "frame_res_arcsec", 0.5), frame_margin_m: param_f64(p, "frame_margin_m", 600.0),
             root_lat: param_f64(p, "root_lat", 37.49995), root_lon: param_f64(p, "root_lon", -122.47432),
@@ -118,7 +120,8 @@ impl OneLine {
         let mut fe = Fetcher::default_for(&root)?;
         self.cos0 = self.root_lat.to_radians().cos();
         // the shoreline: chain the coastline ways from the node nearest the root, walking away from it
-        let ways: Vec<ShoreWay> = osm_shore(&mut fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e)?;
+        if self.data_shore.is_empty() { return Err("coast.oneline: name a shore product in data (shore/osm/<place>/<date>)".into()); }
+        let ways: Vec<ShoreWay> = osm_shore(&mut fe, &self.data_shore)?;
         let coast: Vec<&ShoreWay> = ways.iter().filter(|w| w.kind == "coastline").collect();
         if coast.is_empty() { return Err("coast.oneline: OpenStreetMap has no coastline in the window".into()); }
         let dist = |a: (f64, f64), b: (f64, f64)| { let (ax, ay) = ((a.1 - b.1) * M_PER_DEG * self.cos0, (a.0 - b.0) * M_PER_DEG); (ax * ax + ay * ay).sqrt() };
@@ -193,7 +196,7 @@ impl OneLine {
         if self.breakwater == "on" { st.push(Structure { name: "breakwater".into(), base: self.local(self.root_lat, self.root_lon), tip: self.local(self.tip_lat, self.tip_lon) }); }
         self.structures = st;
         // roads, place names and city limits for the map; fetched once, carried by the describe from the cache
-        if let Err(e) = esim_registry::wildfire::context(&mut fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e) { eprintln!("context: {e} (the map will have no roads or names)"); }
+        crate::map_context(&self.data_roads, &self.data_names);
         // the waves
         self.waves = Some(waves_hourly(&mut fe, self.wave_lat, self.wave_lon, self.year_from, self.year_to)?);
         // the direction offset: a half-degree cell's deep-water direction is not the direction at a
@@ -511,9 +514,7 @@ fn record_rows() -> serde_json::Value {
 impl OneLine {
     pub fn describe(name: &str, p: &toml::Value) -> esim_kernel::describe::Describe {
         // roads and names for the map, from the cache if a run has fetched them
-        let (la_s, la_n, lo_w, lo_e) = (param_f64(p, "lat_s", 37.42), param_f64(p, "lat_n", 37.52), param_f64(p, "lon_w", -122.52), param_f64(p, "lon_e", -122.42));
-        let root = std::env::var("ESIM_ROOT").ok().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-        let ctx_table = Fetcher::default_for(&root).ok().and_then(|f| esim_registry::wildfire::cached_context(&f, la_s, la_n, lo_w, lo_e));
+        let ctx_table = crate::cached_map_context(p);
         let mut d = esim_kernel::describe::Describe::new("coast.oneline", name, "A one-line shoreline model for a bay behind a headland and a breakwater: today's coast as a line of transects; each hour the reanalysis cell's deep-water waves carried to each transect through the structures' shadows (diffracted, lower and from the tip inside a shadow), shoaled and refracted to breaking, and turned into longshore transport by the CERC formula; the transport's divergence moves the line, the line's own angle feeds back, the bluff retreats and yields sand where the beach is gone, a declared fraction of the sand moving past the breakwater's root is lost through its voids into the harbor, sea level rise moves the line by Bruun's rule, and a dredge every so many years puts harbor sand back on the first stretch of beach. Not a fluid dynamics model: no currents, no cross-shore profile, no setup, no reflection. Every coefficient is a published value recalled or a guess, declared so; the record it is read against is the Corps' and Griggs's numbers in the table below.")
             .priority(5).dt(&format!("{} (the waves hour by hour within it)", param_str(p, "dt", "1d")))
             .param("lat_s", 37.42, "deg", "").param("lat_n", 37.52, "deg", "").param("lon_w", -122.52, "deg", "").param("lon_e", -122.42, "deg", "").param("res_arcsec", 1.0, "arcsec", "").param("frame_res_arcsec", 0.5, "arcsec", "the frames: about 15 m, so a decade of retreat is a few cells").param("frame_margin_m", 600.0, "m", "the frames cover the line's own box plus this, not the whole window")
@@ -539,7 +540,7 @@ impl OneLine {
             .report("coast.shore_surfers_m", "m").report("coast.shore_vallejo_m", "m").report("coast.shore_miramar_m", "m").report("coast.shore_south_m", "m")
             .report("coast.bluff_max_m", "m").report("coast.bluff_mean_near_m", "m").report("coast.downcoast_m3", "m3").report("coast.upcoast_m3", "m3").report("coast.placed_m3", "m3")
             .report("fit.near_erosion_ratio", "1").report("fit.harbor_ratio", "1")
-            .asset("open-meteo-era5-ocean-waves", "hourly significant wave height, direction and period at the cell").asset("osm-overpass", "the coastline and the breakwater")
+            .asset("open-meteo-era5-ocean-waves", "hourly significant wave height, direction and period at the cell").asset("esimv1-data", "the coastline and the breakwater, from the shore product named in `data`; roads and names for the map")
             .table("record", record_rows())
             .view("map", "The line", "shore_line", "the shoreline now, dark, and today's line, grey; about 15 m a cell").view("map", "Shoreline change", "shore_change_m", "the strip between today's line and the line now: metres landward (-) or seaward (+)")
             .view("chart", "Surfers Beach: the line", "coast.shore_surfers_m", "mean change of the first 700 m, metres").view("chart", "Vallejo Beach: the line", "coast.shore_vallejo_m", "700 to 1,400 m from the breakwater")
@@ -561,7 +562,7 @@ mod tests {
         let root: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", ".."].iter().collect();
         if !root.join("data/cache").exists() { eprintln!("skipped"); return; }
         std::env::set_var("ESIM_ROOT", &root);
-        let p: toml::Value = toml::from_str("year_from = 1993\nyear_to = 1993").unwrap();
+        let p: toml::Value = toml::from_str("year_from = 1993\nyear_to = 1993\n[data]\nshore = \"shore/osm/half-moon-bay/2026-11-28\"").unwrap();
         let o = OneLine::new("coast", &p).expect("build");
         let n = o.transects.len();
         let mut q = vec![0.0; n + 1];
@@ -580,7 +581,7 @@ mod tests {
         let root: PathBuf = [env!("CARGO_MANIFEST_DIR"), "..", ".."].iter().collect();
         if !root.join("data/cache").exists() { eprintln!("skipped"); return; }
         std::env::set_var("ESIM_ROOT", &root);
-        let p: toml::Value = toml::from_str("year_from = 1961\nyear_to = 1961").unwrap();
+        let p: toml::Value = toml::from_str("year_from = 1961\nyear_to = 1961\n[data]\nshore = \"shore/osm/half-moon-bay/2026-11-28\"").unwrap();
         let mut o = OneLine::new("coast", &p).expect("build");
         let w = o.waves.take().unwrap();
         for h in 0..(60 * 24) {

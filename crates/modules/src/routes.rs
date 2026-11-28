@@ -6,9 +6,7 @@
 //! its `fragility.toml`. The module knows no city. One of the four subject modules that replaced
 //! `hazard.components` on 2026-11-14.
 use crate::fragility::{or, table, tf, ts};
-use crate::quake::{cell_of, root, window_grid};
-use esim_registry::wildfire::{cached_context, context};
-use esim_registry::Fetcher;
+use crate::quake::{cell_of, window_grid};
 use esim_kernel::manifest::{param_f64, param_str};
 use esim_kernel::{Ctx, Describe, Duration, Event, Module};
 use serde::{Deserialize, Serialize};
@@ -23,6 +21,7 @@ struct Link { bridge: String, a: usize, b: usize, open: bool }
 #[derive(Serialize, Deserialize)]
 pub struct Routes {
     name: String,
+    #[serde(default)] data_roads: String, #[serde(default)] data_names: String, #[serde(default)] data_shore: String,
     lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64, res_arcsec: f64,
     folder: String, soils: String,
     closure_days: Vec<(f64, f64)>,
@@ -34,6 +33,7 @@ impl Routes {
     pub fn new(name: &str, p: &toml::Value) -> Result<Routes, String> {
         let mut o = Routes {
             name: name.to_string(),
+            data_roads: crate::data_of(p, "roads"), data_names: crate::data_of(p, "names"), data_shore: crate::data_of(p, "shore"),
             lat_s: crate::fragility::need_f64(p, "lat_s", name)?, lat_n: crate::fragility::need_f64(p, "lat_n", name)?, lon_w: crate::fragility::need_f64(p, "lon_w", name)?, lon_e: crate::fragility::need_f64(p, "lon_e", name)?, res_arcsec: param_f64(p, "res_arcsec", 1.0),
             folder: param_str(p, "folder", "").to_string(), soils: param_str(p, "soils", "wet").to_string(),
             closure_days: Vec::new(), segs: Vec::new(), links: Vec::new(), origin: None, origin_name: String::new(), places: BTreeMap::new(),
@@ -60,7 +60,7 @@ impl Routes {
         self.origin_name = or(ts(&rt, "origin"), "hub");
         if let Some(t) = rt.get("nearest").and_then(|n| n.as_table()) { for (k, v) in t { if let Some(i) = v.as_integer().and_then(|i| index.get(&i)) { if *k == self.origin_name { self.origin = Some(*i); } else { self.places.insert(k.clone(), *i); } } } }
         // the area's roads and place names for a map, from OpenStreetMap; fetched once, carried by the describe from the cache
-        match Fetcher::default_for(&root()) { Ok(mut fe) => { if let Err(e) = context(&mut fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e) { eprintln!("context: {e} (the map will have no roads or names)"); } } Err(e) => eprintln!("context: {e}") }
+        crate::map_context(&self.data_roads, &self.data_names);
         Ok(())
     }
     /// A city's road context is megabytes; a run's describe carries the heavier roads only, each
@@ -132,7 +132,7 @@ impl Routes {
             .view("text", "what this module leaves out", "A segment is open or closed along its whole length. The days closed are a range per deformation class, and the folder's fragility.toml says whether those ranges are published or guessed. Debris, traffic, fuel for vehicles and roads outside the listed network are not represented, so a place that is unreachable here may have another way in.", "");
         if let Some(t) = rule { d = d.table("fragility", json!({ "route": t })); }
         if let Some(g) = rt.as_ref().and_then(|t| Self::geometry(folder, t)) { d = d.table("geometry", g); }
-        if let Some(c) = Fetcher::default_for(&root()).ok().and_then(|f| cached_context(&f, param_f64(p, "lat_s", 0.0), param_f64(p, "lat_n", 0.0), param_f64(p, "lon_w", 0.0), param_f64(p, "lon_e", 0.0))) { d = d.table("context", Self::slim(c)).asset("osm-overpass", "the area's roads and place names for the map, from OpenStreetMap"); }
+        if let Some(c) = crate::cached_map_context(p) { d = d.table("context", Self::slim(c)).asset("esimv1-data", "the area's roads and place names for the map: OpenStreetMap's, from the data warehouse"); }
         d
     }
     fn say(&self, ctx: &mut Ctx, s: &Seg, day: i64) { ctx.publish_at(s.cell, "component.state", json!({ "kind": "route", "id": format!("{}", s.id), "name": format!("segment {}", s.id), "lat": s.lat, "lon": s.lon, "state": if s.class > 0 { 3 } else { 0 }, "down": s.down, "repair_day": s.repair_day, "day": day })); }

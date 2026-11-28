@@ -16,7 +16,7 @@
 
 use esim_kernel::manifest::{param_duration, param_f64, param_str};
 use esim_kernel::{Ctx, Duration, Event, LatLonGrid, Module, Time};
-use esim_registry::wildfire::{building_footprints, cached_context, context, hrrr_hour, landcover_window, osm_buildings, wind_hourly, HrrrHour, WindSeries};
+use esim_registry::wildfire::{hrrr_hour, landcover_window, wind_hourly, HrrrHour, WindSeries};
 use esim_registry::{dem_window, Catalog, Fetcher};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -39,8 +39,8 @@ pub struct Cells {
     wind_use: String,        // mean | gust
     wind_start: String, wind_end: String,
     wind_at: String,         // the simulated instant wind_start stands for; empty: wind_start itself
-    buildings: String,       // lariac | osm | none
-    buildings_service: String, buildings_where: String, buildings_key: String,
+    buildings: String,       // data | none
+    #[serde(default)] data_buildings: String, #[serde(default)] data_roads: String, #[serde(default)] data_names: String,
     // the guesses
     reach_m: f64, lambda_m: f64, wind_gain: f64, slope_gain: f64, slope_rate_gain: f64, downslope_gain: f64,
     form: String,            // reach | vector
@@ -127,10 +127,8 @@ impl Cells {
             wind: param_str(p, "wind", "hrrr").to_string(), wind_use: param_str(p, "wind_use", "mean").to_string(),
             wind_start: param_str(p, "wind_start", "2025-01-07T18:00:00Z").to_string(), wind_end: param_str(p, "wind_end", "2025-01-12T00:00:00Z").to_string(),
             wind_at: param_str(p, "wind_at", "").to_string(),
-            buildings: param_str(p, "buildings", "lariac").to_string(),
-            buildings_service: param_str(p, "buildings_service", "https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/2025_WildFire_LARIAC_BUILDINGS_100M_Plus_DINS_MaxMin_DAMAGE_NEW/FeatureServer/0").to_string(),
-            buildings_where: param_str(p, "buildings_where", "Incident_Name LIKE '%Palisades%'").to_string(),
-            buildings_key: param_str(p, "buildings_key", "lacounty-lariac/2025-palisades").to_string(),
+            buildings: param_str(p, "buildings", "data").to_string(),
+            data_buildings: crate::data_of(p, "buildings"), data_roads: crate::data_of(p, "roads"), data_names: crate::data_of(p, "names"),
             reach_m: param_f64(p, "reach_m", 90.0), lambda_m: param_f64(p, "lambda_m", 20.0), wind_gain: param_f64(p, "wind_gain", 0.15), slope_gain: param_f64(p, "slope_gain", 1.5), slope_rate_gain: param_f64(p, "slope_rate_gain", 0.0), downslope_gain: param_f64(p, "downslope_gain", -1.0),
             form: param_str(p, "form", "reach").to_string(), cooling: param_str(p, "cooling", "always").to_string(), wind_phi: param_f64(p, "wind_phi", 1.9), wind_phi_exp: param_f64(p, "wind_phi_exp", 0.9), phi_cap: param_f64(p, "phi_cap", 30.0), waf: param_f64(p, "waf", 0.4),
             moisture_gain: param_f64(p, "moisture_gain", 10.0), live_moisture_pct: param_f64(p, "live_moisture_pct", 60.0),
@@ -188,11 +186,7 @@ impl Cells {
             // buildings: fraction of each cell under a footprint, and the mean height there
             self.built_frac = vec![0.0; n]; self.built_height = vec![f32::NAN; n];
             let mut hsum = vec![0f32; n]; let mut hcnt = vec![0u16; n];
-            let fetched = match self.buildings.as_str() {
-                "osm" => osm_buildings(&mut fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e),
-                "none" => Err("no building source asked for".to_string()),
-                _ => building_footprints(&mut fe, &self.buildings_service, &self.buildings_key, &self.buildings_where),
-            };
+            let fetched = if self.buildings == "none" || self.data_buildings.is_empty() { Err("no buildings product named in data".to_string()) } else { esim_registry::warehouse::buildings(&mut fe, &self.data_buildings) };
             match fetched {
                 Ok(bs) => {
                     for b in &bs {
@@ -222,7 +216,7 @@ impl Cells {
             // roads as breaks: the major roads of the window, buffered by class
             self.road = vec![false; n];
             let widths: std::collections::HashMap<String, f64> = self.road_widths_m.split(',').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.trim().to_string(), v.trim().parse().unwrap_or(10.0))).collect();
-            let ctxv = context(&mut fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e).ok().or_else(|| cached_context(&fe, self.lat_s, self.lat_n, self.lon_w, self.lon_e));
+            let ctxv = crate::map_context(&self.data_roads, &self.data_names);
             if let Some(cv) = &ctxv {
                 for rd in cv["roads"].as_array().into_iter().flatten() {
                     let Some(&wm) = widths.get(rd["class"].as_str().unwrap_or("")) else { continue };
@@ -742,9 +736,7 @@ impl Module for Cells {
 
 impl Cells {
     pub fn describe(name: &str, p: &toml::Value) -> esim_kernel::describe::Describe {
-        let root = std::env::var("ESIM_ROOT").ok().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-        let (lat_s, lat_n, lon_w, lon_e) = (param_f64(p, "lat_s", 34.0), param_f64(p, "lat_n", 34.16), param_f64(p, "lon_w", -118.72), param_f64(p, "lon_e", -118.46));
-        let ctx_table = Fetcher::default_for(&root).ok().and_then(|f| cached_context(&f, lat_s, lat_n, lon_w, lon_e));
+        let ctx_table = crate::cached_map_context(p);
         let mut d = esim_kernel::describe::Describe::new("fire.cells", name, "Our own fire engine: a heat budget on one-arc-second cells that know their elevation and slope, land cover, the share under buildings and their height, the major roads, and the hour's 3 km wind, gust, temperature and humidity. A burning cell radiates heat into the cells around it, further downwind and upslope; a cell ignites when the heat it has received outweighs what its fuel and moisture absorb, then burns with the intensity and for the time its contents set; strong winds loft embers that may start spot fires; roads and water carry nothing; nobody fights it. Every rate and threshold is a guess, declared so, to be fitted against the record.")
             .priority(6).dt(param_str(p, "dt", "1h"))
             .param("lat_s", 34.0, "deg", "").param("lat_n", 34.16, "deg", "").param("lon_w", -118.72, "deg", "").param("lon_e", -118.46, "deg", "").param("res_arcsec", 1.0, "arcsec", "")
@@ -752,8 +744,8 @@ impl Cells {
             .param("ignition_time", "2025-01-07T18:30:00Z", "", "").param("ignition_lat", 34.0723, "deg", "").param("ignition_lon", -118.5451, "deg", "")
             .param("wind", "hrrr", "", "hrrr: NOAA's 3 km analysis, a field over the window each hour; era5: one 25 km point").param("wind_use", "mean", "", "mean or gust")
             .param("wind_start", "2025-01-07T18:00:00Z", "", "the first hour of the wind record fetched").param("wind_end", "2025-01-12T00:00:00Z", "", "").param("wind_at", "", "", "the simulated instant wind_start stands for, when a run borrows another day's weather (a scenario in a year with no record yet); empty means wind_start itself, so a run in the record's own time is unchanged. A borrowed wind is a borrowed wind: the page must say whose day it was")
-            .param("buildings", "lariac", "", "lariac: LA County's footprints with heights from the feature service below (the Palisades window); osm: OpenStreetMap buildings through Overpass for the window, heights from the height tag or building:levels times 3.2 m, else two storeys, a guess; none: built-up land from land cover alone")
-            .param("buildings_service", "https://services.arcgis.com/RmCCgQtiZLDCtblq/arcgis/rest/services/2025_WildFire_LARIAC_BUILDINGS_100M_Plus_DINS_MaxMin_DAMAGE_NEW/FeatureServer/0", "", "").param("buildings_where", "Incident_Name LIKE '%Palisades%'", "", "").param("buildings_key", "lacounty-lariac/2025-palisades", "", "")
+            .param("buildings", "data", "", "data: the buildings product named in `data`; none: built-up land from land cover alone. Read only when inputs is not world")
+            .param("data", "", "", "a table naming warehouse products: `buildings`, `roads` (major roads as breaks, and the map's roads) and `names` (the map's place names). In world mode only the map's table is read from it")
             .param("reach_m", 90.0, "m", "guess: how far a burning cell's heat is felt").param("lambda_m", 20.0, "m", "guess: e-folding distance of that heat in still air on the flat")
             .param("wind_gain", 0.15, "1/(m/s)", "guess: the reach grows by this per m/s of wind in the downwind direction").param("slope_gain", 1.5, "", "guess: the reach grows by this times tan(slope) uphill").param("slope_rate_gain", 0.0, "", "the heat a cell delivers uphill is multiplied by 1 + this times tan²(slope) and downhill divided by it; 0 leaves slope to the reach alone. Rothermel's slope factor has this shape with 5.275 β^-0.3 as the gain, about 20 for a shrub bed (recalled); the downhill half is a guess").param("downslope_gain", -1.0, "", "the gain on the downhill division; -1 means the same as slope_rate_gain")
             .param("form", "reach", "", "reach: wind and slope stretch the e-folding distance of the heat (the first form, capped at a few times the flat rate); vector: the heat is I·f(d) times a directional rate factor with Rothermel's shape, wind (downwind) and slope (uphill) added as vectors, head rate 1 + |φ|, every other direction by Anderson's ellipse from the head, so the backing rate is the ellipse's. wind_gain and slope_gain are not used in the vector form")
@@ -787,7 +779,7 @@ impl Cells {
             .report("fire.burned_acres", "acres").report("fire.burned_km2", "km2").report("fire.active_cells", "cells").report("fire.ignited_cells_hour", "cells/h").report("fire.spots_hour", "1/h")
             .report("fire.wind_m_s", "m/s").report("fire.wind_from_deg", "deg").report("fire.dead_moisture_pct", "%").report("fire.built_cells_burned", "cells").report("fire.held_cells", "cells").report("fire.breaks_held", "breaks")
             .subscribe("ground.break", "from an interventions module (fire.suppression): { cells, strength } the cells take no heat and no ember from the break's time on; the engine never reads the record itself")
-            .asset("copernicus-dem-glo30", "elevation, slope, aspect").asset("esa-worldcover-2021", "land cover").asset("lacounty-lariac-buildings-2025-fires", "building footprints and heights").asset("osm-overpass", "major roads as breaks; the map's context").asset("noaa-hrrr", "the 3 km wind, gust, temperature and humidity each hour").asset("open-meteo-era5-wind", "the one-point alternative")
+            .asset("copernicus-dem-glo30", "elevation, slope, aspect").asset("esa-worldcover-2021", "land cover").asset("esimv1-data", "building footprints and heights; major roads as breaks; the map's roads and names").asset("noaa-hrrr", "the 3 km wind, gust, temperature and humidity each hour").asset("open-meteo-era5-wind", "the one-point alternative")
             .view("scene", "The fire on the ground", "fire_arrival_h", "terrain, buildings and the fire's arrival, in three dimensions")
             .view("map", "Arrival time", "fire_arrival_h", "hours since ignition").view("map", "What each cell is", "fire_fuel_kind", "")
             .view("chart", "Burned area", "fire.burned_acres", "").view("chart", "Buildings the model has lit", "fire.buildings_ignited", "against the inspectors' record: recall and precision in the series").view("chart", "Wind at the ignition point", "fire.wind_m_s", "HRRR 3 km").view("chart", "Spot fires", "fire.spots_hour", "")

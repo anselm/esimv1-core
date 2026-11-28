@@ -4,7 +4,6 @@
 //! WFIGS final perimeter and the Operational Data Archive's daily perimeters), with a
 //! rasteriser so a run's burned area can be scored against them. All anonymous.
 
-use serde_json::json;
 use crate::catalog::Asset;
 use crate::cog;
 use crate::fetch::Fetcher;
@@ -235,171 +234,6 @@ mod tests {
     }
 }
 
-// ---- context for a map: roads, place names and city limits from OpenStreetMap ----------
-
-fn thin(pts: Vec<(f64, f64)>, max: usize) -> Vec<(f64, f64)> {
-    if pts.len() <= max { return pts; }
-    let step = pts.len() as f64 / max as f64;
-    let mut out: Vec<(f64, f64)> = (0..max).map(|i| pts[(i as f64 * step) as usize]).collect();
-    if let Some(&last) = pts.last() { out.push(last); }
-    out
-}
-fn r5(x: f64) -> f64 { (x * 1e5).round() / 1e5 }
-
-/// Reduce an Overpass answer (`out geom`) to what a map needs: roads by class, named places
-/// as points, and city limits (admin_level 8 relations) as lines.
-pub fn reduce_context(raw: &[u8], bbox: (f64, f64, f64, f64)) -> Result<Vec<u8>, String> {
-    let (lat_s, lat_n, lon_w, lon_e) = bbox;
-    let inside = |p: &(f64, f64)| p.0 >= lon_w - 0.01 && p.0 <= lon_e + 0.01 && p.1 >= lat_s - 0.01 && p.1 <= lat_n + 0.01;
-    let v: serde_json::Value = serde_json::from_slice(raw).map_err(|e| format!("overpass json: {e}"))?;
-    if let Some(r) = v.get("remark") { if r.as_str().map(|s| s.contains("error")).unwrap_or(false) { return Err(format!("overpass: {r}")); } }
-    let (mut roads, mut places, mut bounds) = (Vec::new(), Vec::new(), Vec::new());
-    let geom = |g: &serde_json::Value| -> Vec<(f64, f64)> { g.as_array().into_iter().flatten().filter_map(|p| Some((r5(p["lon"].as_f64()?), r5(p["lat"].as_f64()?)))).collect() };
-    for e in v["elements"].as_array().into_iter().flatten() {
-        let tags = &e["tags"];
-        match e["type"].as_str() {
-            Some("way") => {
-                let pts = thin(geom(&e["geometry"]), 120);
-                if pts.len() > 1 { roads.push(serde_json::json!({ "class": tags["highway"].as_str().unwrap_or(""), "name": tags["name"].as_str().unwrap_or(""), "pts": pts })); }
-            }
-            Some("node") => {
-                if let (Some(lat), Some(lon), Some(name)) = (e["lat"].as_f64(), e["lon"].as_f64(), tags["name"].as_str()) {
-                    places.push(serde_json::json!({ "name": name, "kind": tags["place"].as_str().unwrap_or(""), "lon": r5(lon), "lat": r5(lat) }));
-                }
-            }
-            Some("relation") => {
-                let name = tags["name"].as_str().unwrap_or("").to_string();
-                // a city limit comes back whole (Los Angeles is 258 ways); keep the runs inside the window
-                for m in e["members"].as_array().into_iter().flatten() {
-                    if m["type"].as_str() != Some("way") { continue; }
-                    let pts = geom(&m["geometry"]);
-                    let mut run: Vec<(f64, f64)> = Vec::new();
-                    for p in pts.iter().chain(std::iter::once(&(f64::NAN, f64::NAN))) {
-                        if p.0.is_finite() && inside(p) { run.push(*p); }
-                        else { if run.len() > 1 { bounds.push(serde_json::json!({ "name": name, "pts": thin(std::mem::take(&mut run), 200) })); } run.clear(); }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    serde_json::to_vec(&serde_json::json!({ "roads": roads, "places": places, "boundaries": bounds, "source": "OpenStreetMap contributors, ODbL, through the Overpass API" })).map_err(|e| e.to_string())
-}
-
-fn context_key(lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64) -> String { format!("osm-overpass/context_{lat_s}_{lat_n}_{lon_w}_{lon_e}.json") }
-
-/// Fetch (once; the lock keeps the raw answer's hash, the cache the reduced map) the
-/// roads, places and city limits inside a window.
-pub fn context(fetcher: &mut Fetcher, lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64) -> Result<serde_json::Value, String> {
-    // the city limits (admin_level 8 relations with their geometry) only for a small window: over a
-    // large one the relation is a whole rural municipality (Wood Buffalo around Fort McMurray is
-    // 63,000 km²) and Overpass answers 504 for an hour (2026-11-04)
-    let bounds = if (lat_n - lat_s) * (lon_e - lon_w) < 0.1 { format!("relation[\"boundary\"=\"administrative\"][\"admin_level\"=\"8\"]({lat_s},{lon_w},{lat_n},{lon_e});") } else { String::new() };
-    let q = format!("[out:json][timeout:180];(way[\"highway\"~\"^(motorway|trunk|primary|secondary|tertiary)$\"]({lat_s},{lon_w},{lat_n},{lon_e});node[\"place\"~\"^(city|town|suburb|neighbourhood|village|quarter)$\"]({lat_s},{lon_w},{lat_n},{lon_e});{bounds});out geom;");
-    // overpass-api.de answered 406 and then 502 (at capacity) on 2026-11-03; the kumi mirror answered in four minutes
-    let bbox = (lat_s, lat_n, lon_w, lon_e);
-    let key = context_key(lat_s, lat_n, lon_w, lon_e);
-    let mut last = String::new();
-    let mut path = None;
-    for host in ["https://overpass.kumi.systems/api/interpreter", "https://overpass-api.de/api/interpreter"] {
-        let url = format!("{host}?data={}", enc(&q));
-        match fetcher.fetch_reduced(&key, &url, &|raw| reduce_context(raw, bbox)) { Ok(p) => { path = Some(p); break; } Err(e) => { last = e; } }
-    }
-    let path = path.ok_or(last)?;
-    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&text).map_err(|e| format!("context cache: {e}"))
-}
-
-/// Every OpenStreetMap building in a window, through Overpass, with a height in feet (so the
-/// engine and the viewer treat it as they treat the county's footprints, whose unit is feet):
-/// the `height` tag in metres when present, else `building:levels` times 3.2 m, else two storeys
-/// (6.4 m), a declared guess. No damage field: OSM does not record the fire's outcome.
-pub fn osm_buildings(fetcher: &mut Fetcher, lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64) -> Result<Vec<Building>, String> {
-    let q = format!("[out:json][timeout:180];(way[\"building\"]({lat_s},{lon_w},{lat_n},{lon_e}););out geom;");
-    let key = format!("osm-overpass/buildings_{lat_s}_{lat_n}_{lon_w}_{lon_e}.json");
-    let mut last = String::new();
-    let mut path = None;
-    for host in ["https://overpass.kumi.systems/api/interpreter", "https://overpass-api.de/api/interpreter"] {
-        let url = format!("{host}?data={}", enc(&q));
-        match fetcher.fetch_reduced(&key, &url, &|raw| reduce_buildings(raw)) { Ok(p) => { path = Some(p); break; } Err(e) => { last = e; } }
-    }
-    let path = path.ok_or(last)?;
-    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("osm buildings cache: {e}"))?;
-    let mut out = Vec::new();
-    for b in v.as_array().cloned().unwrap_or_default() {
-        let ring: Vec<(f64, f64)> = b["ring"].as_array().cloned().unwrap_or_default().iter().filter_map(|p| Some((p.get(0)?.as_f64()?, p.get(1)?.as_f64()?))).collect();
-        if ring.len() < 3 { continue; }
-        out.push(Building { ring, height: b["height_ft"].as_f64().unwrap_or(f64::NAN), damage: String::new() });
-    }
-    Ok(out)
-}
-fn reduce_buildings(raw: &[u8]) -> Result<Vec<u8>, String> {
-    let v: serde_json::Value = serde_json::from_slice(raw).map_err(|e| format!("overpass json: {e}"))?;
-    if let Some(r) = v.get("remark") { if r.as_str().map(|s| s.contains("error")).unwrap_or(false) { return Err(format!("overpass: {r}")); } }
-    let num = |s: &str| -> Option<f64> { s.trim().split(|c: char| !(c.is_ascii_digit() || c == '.')).next().and_then(|x| x.parse::<f64>().ok()) };
-    let mut out = Vec::new();
-    for e in v["elements"].as_array().cloned().unwrap_or_default() {
-        if e["type"] != "way" { continue; }
-        let ring: Vec<serde_json::Value> = e["geometry"].as_array().cloned().unwrap_or_default().iter().filter_map(|g| Some(json!([g["lon"].as_f64()?, g["lat"].as_f64()?]))).collect();
-        if ring.len() < 3 { continue; }
-        let tags = &e["tags"];
-        let metres = tags["height"].as_str().and_then(num)
-            .or_else(|| tags["building:levels"].as_str().and_then(num).map(|l| l * 3.2))
-            .unwrap_or(6.4);
-        out.push(json!({ "ring": ring, "height_ft": metres / 0.3048, "levels": tags["building:levels"].as_str(), "kind": tags["building"].as_str() }));
-    }
-    serde_json::to_vec(&out).map_err(|e| e.to_string())
-}
-
-/// The cached context for a window, never fetching (for a describe).
-pub fn cached_context(fetcher: &Fetcher, lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64) -> Option<serde_json::Value> {
-    let name = context_key(lat_s, lat_n, lon_w, lon_e).replace(['/', ' '], "_");
-    let text = std::fs::read_to_string(fetcher.kept_path(&name)).ok()?;
-    serde_json::from_str(&text).ok()
-}
-
-/// Reduce an Overpass answer to the bridges in a window: each way tagged as a bridge that carries
-/// a road or a railway, with its name when it has one.
-pub fn reduce_bridges(raw: &[u8]) -> Result<Vec<u8>, String> {
-    let v: serde_json::Value = serde_json::from_slice(raw).map_err(|e| format!("overpass json: {e}"))?;
-    if let Some(r) = v.get("remark") { if r.as_str().map(|s| s.contains("error")).unwrap_or(false) { return Err(format!("overpass: {r}")); } }
-    let mut ways = Vec::new();
-    for e in v["elements"].as_array().into_iter().flatten() {
-        if e["type"].as_str() != Some("way") { continue; }
-        let pts: Vec<(f64, f64)> = e["geometry"].as_array().into_iter().flatten().filter_map(|p| Some((r5(p["lon"].as_f64()?), r5(p["lat"].as_f64()?)))).collect();
-        if pts.len() < 2 { continue; }
-        let t = &e["tags"];
-        let name = t["bridge:name"].as_str().or(t["name"].as_str()).unwrap_or("");
-        ways.push(serde_json::json!({ "name": name, "carries": t["highway"].as_str().or(t["railway"].as_str()).unwrap_or(""), "pts": pts }));
-    }
-    serde_json::to_vec(&serde_json::json!({ "ways": ways, "source": "OpenStreetMap contributors, ODbL, through the Overpass API" })).map_err(|e| e.to_string())
-}
-fn bridges_key(lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64) -> String { format!("osm-overpass/bridges_{lat_s}_{lat_n}_{lon_w}_{lon_e}.json") }
-
-/// Fetch (once) every bridge way inside a window that carries a road of some weight or a railway:
-/// the lines a map draws a bridge with. `{ ways: [{ name, carries, pts: [[lon, lat]] }] }`.
-pub fn osm_bridges(fetcher: &mut Fetcher, lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64) -> Result<serde_json::Value, String> {
-    let b = format!("({lat_s},{lon_w},{lat_n},{lon_e})");
-    let q = format!("[out:json][timeout:180];(way[\"bridge\"][\"highway\"~\"^(motorway|trunk|primary|secondary|tertiary|busway|motorway_link|trunk_link|primary_link)$\"]{b};way[\"bridge\"][\"railway\"~\"^(rail|light_rail|tram)$\"]{b};);out geom;");
-    let key = bridges_key(lat_s, lat_n, lon_w, lon_e);
-    let mut last = String::new();
-    let mut path = None;
-    for host in ["https://overpass.kumi.systems/api/interpreter", "https://overpass-api.de/api/interpreter"] {
-        let url = format!("{host}?data={}", enc(&q));
-        match fetcher.fetch_reduced(&key, &url, &|raw| reduce_bridges(raw)) { Ok(p) => { path = Some(p); break; } Err(e) => { last = e; } }
-    }
-    let path = path.ok_or(last)?;
-    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&text).map_err(|e| format!("bridges cache: {e}"))
-}
-/// The cached bridge ways for a window, never fetching (for a describe).
-pub fn cached_osm_bridges(fetcher: &Fetcher, lat_s: f64, lat_n: f64, lon_w: f64, lon_e: f64) -> Option<serde_json::Value> {
-    let name = bridges_key(lat_s, lat_n, lon_w, lon_e).replace(['/', ' '], "_");
-    let text = std::fs::read_to_string(fetcher.kept_path(&name)).ok()?;
-    serde_json::from_str(&text).ok()
-}
-
 // ---- structures and their fate: CAL FIRE's damage inspections -------------------------
 
 /// One inspected structure: where it stands, what it is, and the damage category the
@@ -523,32 +357,10 @@ mod hrrr_tests {
     }
 }
 
-// ---- buildings: LA County's footprints with the damage inspection joined ----------------
+// ---- buildings: a footprint as the engine holds it; read from the warehouse (warehouse.rs) ----
 
-/// A building footprint: its outer ring, the stated height (the service does not say its
-/// unit; the values read as feet), and the maximum damage the inspection recorded.
+/// A building footprint: its outer ring, its height in feet (NaN where none is known), and the
+/// maximum damage an inspection recorded, where the source kept one.
 #[derive(Clone, Debug)]
 pub struct Building { pub ring: Vec<(f64, f64)>, pub height: f64, pub damage: String }
 
-/// Every footprint of a feature service matching `where`, paged, anonymously.
-pub fn building_footprints(fetcher: &mut Fetcher, service: &str, key_prefix: &str, wh: &str) -> Result<Vec<Building>, String> {
-    let mut out = Vec::new();
-    let mut offset = 0usize;
-    for page in 0..60 {
-        let url = format!("{service}/query?where={}&outFields=HEIGHT,DINS_MaximumDamage&outSR=4326&f=geojson&resultOffset={offset}&resultRecordCount=2000", enc(wh));
-        let text = fetch_json_text(fetcher, &format!("{key_prefix}/page{page:02}.geojson"), &url)?;
-        let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("buildings json: {e}"))?;
-        if let Some(e) = v.get("error") { return Err(format!("buildings: {e}")); }
-        let feats = v["features"].as_array().cloned().unwrap_or_default();
-        let n = feats.len();
-        for f in feats {
-            let rings = rings_of(&f["geometry"]);
-            let Some(ring) = rings.into_iter().next() else { continue };
-            out.push(Building { ring, height: f["properties"]["HEIGHT"].as_f64().unwrap_or(f64::NAN), damage: f["properties"]["DINS_MaximumDamage"].as_str().unwrap_or("").to_string() });
-        }
-        let more = v["properties"]["exceededTransferLimit"].as_bool().unwrap_or(n == 2000);
-        if n == 0 || !more { break; }
-        offset += n;
-    }
-    Ok(out)
-}
